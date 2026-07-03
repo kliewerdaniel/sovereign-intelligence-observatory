@@ -108,7 +108,7 @@ Actionable Insights
 - Python async programming
 - Recipe schema design
 
-**Related blog post:** [Sovereign Memory Bank](https://www.danielkliewer.com/blog/2026-06-14-sovereign-memory-bank-autonomous-cognitive-memory-system/)
+**Related blog post:** [Sovereign Memory Bank](https://www.danielkliewer.com/blog/2026-06-14-sovereign-memory-bank-a-deep-dive-into-autonomous-cognitive-memory-for-agent-systems/)
 
 ---
 
@@ -168,7 +168,7 @@ Recipe updated for future fine-tuning
 - Statistical analysis
 - Drift detection algorithms
 
-**Related blog post:** [Sovereign Memory Bank](https://www.danielkliewer.com/blog/2026-06-14-sovereign-memory-bank-autonomous-cognitive-memory-system/)
+**Related blog post:** [Sovereign Memory Bank](https://www.danielkliewer.com/blog/2026-06-14-sovereign-memory-bank-a-deep-dive-into-autonomous-cognitive-memory-for-agent-systems/)
 
 ---
 
@@ -224,7 +224,7 @@ Recipe updated for future fine-tuning
 - Report generation
 - Dashboard design (optional)
 
-**Related blog post:** [Sovereign Memory Bank](https://www.danielkliewer.com/blog/2026-06-14-sovereign-memory-bank-autonomous-cognitive-memory-system/)
+**Related blog post:** [Sovereign Memory Bank](https://www.danielkliewer.com/blog/2026-06-14-sovereign-memory-bank-a-deep-dive-into-autonomous-cognitive-memory-for-agent-systems/)
 
 ---
 
@@ -367,9 +367,8 @@ python3 verify-observatory.py
 
 ### Related Blog Posts
 
-- **[Sovereign Memory Bank](https://www.danielkliewer.com/blog/2026-06-14-sovereign-memory-bank-autonomous-cognitive-memory-system/)** — How I built an autonomous cognitive memory system that transforms documents into evolving knowledge — no cloud required.
-- **[The Sovereignty Manifesto](https://www.danielkliewer.com/blog/2026-03-28-the-sovereignty-manifesto-why-data-sovereignty-is-a-fundamental-right-and-why-the-future-of-ai-is-local/)** — Why data sovereignty is a fundamental right and why the future of AI is local.
-- **[Your First Local AI](https://www.danielkliewer.com/blog/2026-03-10-your-first-local-ai-stop-paying-per-token-run-your-own-ai-assistant-on-your-laptop-with-ollama/)** — Stop paying per token. Run your own AI assistant on your laptop with Ollama.
+- **[Sovereign Memory Bank](https://www.danielkliewer.com/blog/2026-06-14-sovereign-memory-bank-a-deep-dive-into-autonomous-cognitive-memory-for-agent-systems/)** — How I built an autonomous cognitive memory system that transforms documents into evolving knowledge — no cloud required.
+- **[The Sovereignty Manifesto](https://www.danielkliewer.com/blog/2026-03-28-sovereignty-manifesto/)** — Why data sovereignty is a fundamental right and why the future of AI is local.
 
 ### Related Projects
 
