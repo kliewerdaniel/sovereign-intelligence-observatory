@@ -382,7 +382,7 @@ cd sovereign-apprenticeship && pytest tests/
 cd intelligence-observatory && pytest tests/
 pytest tests/test_shared_infrastructure.py
 
-# Expected: 121 tests, all passing, 0 warnings
+# Expected: 135 tests, all passing, 0 warnings
 ```
 
 **Test architecture:**
@@ -591,6 +591,81 @@ transport = HttpTransport(
 )
 await transport.push(payload, "http://peer:8000")
 ```
+
+---
+
+## Resource-Constrained Optimization & Archiving
+
+### Token-Aware Context Condenser
+
+`shared/context_condenser.py` provides a streaming token calculator that prevents LLM context-window overflow by selectively truncating recipe context:
+
+- **Token estimation** — uses `tiktoken` when available, falls back to whitespace heuristic (`len(text.split())`).
+- **Configurable window** — `MAX_TOKENS` env var (default 8192 for Qwen 2.5 3B), `CONTEXT_WINDOW_RATIO` (default 0.85).
+- **Two-phase truncation** — first drops oldest recipe contexts until under threshold; if still over, applies semantic summary (`summarize_context()`).
+- **Error handling** — raises `ContextTruncationError` if even summarization cannot fit within `MAX_TOKENS`.
+
+Configuration:
+```python
+from shared.context_condenser import TokenAwareContextCondenser
+
+condenser = TokenAwareContextCondenser(
+    tokenizer_model="cl100k_base",   # tiktoken encoding name
+    max_tokens=8192,                 # Qwen 2.5 3B context window
+    context_window_ratio=0.85,       # trigger threshold
+)
+result = condenser.condense(context)
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `TOKENIZER_MODEL` | `cl100k_base` | tiktoken encoding name (falls back to whitespace if unavailable) |
+| `MAX_TOKENS` | `8192` | Hard token limit for the target model |
+| `CONTEXT_WINDOW_RATIO` | `0.85` | Fraction of MAX_TOKENS that triggers truncation |
+
+### Quantization Drift Baseline
+
+`shared/quantization_drift.py` runs a reference evaluation when capability regression is detected, isolating the root cause:
+
+- **Reference eval** — lightweight internal scoring function (`_reference_eval`) measures model baseline against weighted criteria (output length, unique token ratio, structure markers).
+- **Classification** — compares regression score change against reference score difference:
+  - **Quantization drift** — reference and regression degrade similarly (difference ≤ `drift_threshold`).
+  - **Software regression** — reference stays stable while task regresses (difference > `2 × drift_threshold`).
+  - **Unknown** — difference falls in the indeterminate band; manual investigation recommended.
+- **Output** — `DriftDiagnostic` dataclass with `root_cause`, `severity`, `recommendation`, `details`, and `affected_tasks`.
+
+### Delta-Encoded WebSocket Telemetry
+
+The `TelemetryManager` in `intelligence-observatory/src/telemetry.py` broadcasts only changed fields between cycles:
+
+- **Delta encoding** — `_compute_delta()` performs a shallow top-level key diff between the previous and current payload. Only changed keys are broadcast.
+- **Full snapshots** — every 6th cycle (30 seconds at 5 s interval) the full payload is sent so late-joining clients can re-sync.
+- **First-connect full push** — the very first broadcast is always a full snapshot.
+- **Bandwidth reduction** — typical deltas are <30% of full payload size under stable conditions.
+
+Message format:
+```json
+{
+  "delta": {"stats": {"timeline_entries": 42}, "drift_alerts": [...]},
+  "ts": "2025-06-15T12:00:05"
+}
+```
+
+Client reconstruction: accumulate deltas against a local state object. Every 30 s the full snapshot resets the accumulator.
+
+### Cold-Storage Archive Pipeline
+
+`intelligence-observatory/src/archive.py` moves old intelligence data into compressed storage:
+
+- **`ArchivePipeline`** — identifies recipes older than `ARCHIVE_AFTER_DAYS` (default 90), compresses them into gzipped CSV (`csv.DictWriter` + `gzip`), and computes a SHA-256 hash.
+- **Hash-pointers** — archived rows are replaced with a JSON metadata blob: `{"archived": true, "hash": "sha256:...", "original_count": N, "archived_at": "..."}`.
+- **Verification** — `verify_archive(filename)` reads the gzip, re-computes the hash, and compares against the stored hash.
+- **std-only** — no `pandas`, `pyarrow`, or other dependencies. Output is universally readable.
+- **API** — `POST /api/recipes/archive` triggers archiving; `GET /api/recipes/archive/verify?filename=...` verifies integrity.
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARCHIVE_AFTER_DAYS` | `90` | Age in days after which recipes are eligible for cold storage |
 
 ---
 

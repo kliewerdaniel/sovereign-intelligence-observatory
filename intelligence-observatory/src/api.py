@@ -114,6 +114,26 @@ async def get_capability_changes(
     return await db.get_capability_changes(lookback_days)
 
 
+@app.post("/api/recipes/archive")
+async def archive_old_recipes(
+    db: ObservatoryDatabase = Depends(get_db),
+) -> dict:
+    from .archive import ArchivePipeline
+    pipeline = ArchivePipeline(db._db, archive_dir="archives")
+    result = await pipeline.archive_recipes()
+    return result
+
+
+@app.get("/api/recipes/archive/verify")
+async def verify_archive(
+    filename: str = Query(...),
+    db: ObservatoryDatabase = Depends(get_db),
+) -> Dict[str, Any]:
+    from .archive import ArchivePipeline
+    pipeline = ArchivePipeline(db._db, archive_dir="archives")
+    return await pipeline.verify_archive(filename)
+
+
 @app.get("/api/observatory/stats", response_model=ObservatoryStats)
 async def get_observatory_stats(
     db: ObservatoryDatabase = Depends(get_db),

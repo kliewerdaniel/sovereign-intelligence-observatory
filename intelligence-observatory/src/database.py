@@ -273,5 +273,22 @@ class ObservatoryDatabase:
             "last_updated": datetime.now().isoformat(),
         }
 
+    async def _init_archive_schema(self) -> None:
+        await self._init_schema()
+        await self._db.executescript("""
+            CREATE TABLE IF NOT EXISTS cold_storage_archive (
+                filename TEXT PRIMARY KEY,
+                hash TEXT NOT NULL,
+                recipe_count INTEGER DEFAULT 0,
+                archived_at TEXT NOT NULL
+            );
+        """)
+
+    async def get_archive_metadata(self) -> List[Dict[str, Any]]:
+        await self._init_archive_schema()
+        return await self._db.fetchall(
+            "SELECT * FROM cold_storage_archive ORDER BY archived_at DESC"
+        )
+
     async def close(self) -> None:
         await self._db.close()
