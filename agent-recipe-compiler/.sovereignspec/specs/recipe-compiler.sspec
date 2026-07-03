@@ -1,0 +1,71 @@
+id: agent-recipe-compiler
+title: Agent Recipe Compiler
+version: 1.0.0
+status: active
+purpose: Compile agent run data into structured, versioned recipe artifacts that serve as reproducible, debuggable, and trainable records of how intelligence evolved.
+
+requirements:
+  - System must capture agent run data including model version, prompt version, memory version, retrieved documents, and reasoning patterns into structured recipe format
+  - System must assign unique recipe IDs following pattern recipe-YYYYMMDD-HHMMSS
+  - System must store evaluation scores with expert review status (none, cheap, expert)
+  - System must track recipe outcomes as accepted, rejected, or needs_revision
+  - System must index recipes in a local SQLite database with full-text search capability
+  - System must expose recipes via a local HTTP API at /api/recipes
+  - System must support recipe export to JSON and CSV formats for training data generation
+  - System must detect recipe drift by comparing consecutive runs against baseline patterns
+  - System must generate recipe summaries showing success rates, model performance, and memory usage
+  - System must support recipe versioning with semantic versioning for prompt and memory changes
+  - System must ensure all data remains local — no external API calls during recipe capture
+  - System must validate recipe schema before storage using GBNF grammar constraints via Ollama
+
+constraints:
+  - All recipe data must be stored locally in SQLite and local filesystem
+  - No external API calls or cloud services during recipe capture or retrieval
+  - Recipe capture must not block agent execution — use async background processing
+  - Recipe schema must be backward compatible — new fields are additive only
+  - System must complete recipe capture within 500ms to avoid latency impact
+  - Maximum recipe size must not exceed 1MB to ensure fast retrieval
+  - System must support offline operation — no network dependency
+  - Recipe IDs must be globally unique across all agent instances (use UUID v4)
+
+acceptance_criteria:
+  - Given agent run data, system produces valid recipe artifact within 100ms
+  - Given valid recipe, system stores it in SQLite with full-text index
+  - Given recipe ID, system retrieves complete recipe with all metadata
+  - Given recipe export request, system generates valid JSON/CSV without external dependencies
+  - Given consecutive recipes, system detects drift when reasoning patterns change significantly
+  - System runs on macOS, Linux, and Windows with Python 3.9+
+  - All tests pass with pytest
+
+dependencies: []
+test_cases:
+  - id: TC-001
+    description: Capture basic recipe from agent run
+    given: agent runs qwen3.5 model on classification task
+    when: recipe compiler processes run data
+    then: produces recipe with id, model, prompt_version, memory_version, evaluation, and outcome fields
+  - id: TC-002
+    description: Store recipe in SQLite
+    given: valid recipe artifact
+    when: system stores recipe
+    then: recipe is retrievable by ID with all metadata intact
+  - id: TC-003
+    description: Export recipes to JSON
+    given: 100 recipes in database
+    when: system exports to JSON
+    then: generates valid JSON file with all recipes
+  - id: TC-004
+    description: Detect recipe drift
+    given: 50 consecutive recipes for same task
+    when: system analyzes reasoning patterns
+    then: reports drift when pattern changes exceed 20% threshold
+  - id: TC-005
+    description: Validate recipe schema
+    given: recipe with missing required field
+    when: system validates via GBNF grammar
+    then: rejects recipe with clear error message
+  - id: TC-006
+    description: Capture does not block agent
+    given: agent running inference
+    when: recipe compiler processes data
+    then: agent completes inference without added latency > 100ms

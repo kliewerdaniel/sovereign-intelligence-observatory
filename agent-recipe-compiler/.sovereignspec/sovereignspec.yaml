@@ -1,0 +1,12 @@
+llm:
+  provider: ollama
+  host: http://localhost:11434
+  timeout: 120
+  models:
+  - name: qwen2.5-coder:7b
+    role: generation
+  - name: nomic-embed-text
+    role: embeddings
+  - name: llama3.1:8b
+    role: analysis
+adapter: generic
