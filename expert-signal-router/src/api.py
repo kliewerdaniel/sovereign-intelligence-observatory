@@ -1,44 +1,54 @@
 """Expert Signal Router - HTTP API"""
-from fastapi import FastAPI, HTTPException, Query
-from typing import Optional, List, Dict, Any
 
+from typing import List, Dict, Any
+from fastapi import FastAPI, HTTPException, Depends
+
+from .models import RouteRequest, RouteResponse, ReviewRequest
 from .database import SignalDatabase
 
-app = FastAPI(title="Expert Signal Router", version="1.0.0")
-db = SignalDatabase()
+app = FastAPI(title="Expert Signal Router", version="2.0.0")
 
 
-@app.post("/api/route/{recipe_id}")
-async def route_recipe(recipe_id: str, objective: str, confidence: float) -> Dict[str, Any]:
-    """Route recipe evaluation based on confidence"""
-    return db.route_recipe(recipe_id, objective, confidence)
+async def get_db() -> SignalDatabase:
+    db = SignalDatabase()
+    yield db
+    await db.close()
+
+
+@app.post("/api/route/{recipe_id}", response_model=RouteResponse)
+async def route_recipe(
+    recipe_id: str,
+    body: RouteRequest,
+    db: SignalDatabase = Depends(get_db),
+) -> RouteResponse:
+    result = await db.route_recipe(recipe_id, body.objective, body.confidence)
+    return RouteResponse(**result)
 
 
 @app.get("/api/pending-reviews")
-async def get_pending_reviews() -> List[Dict[str, Any]]:
-    """Get all pending expert reviews"""
-    return db.get_pending_reviews()
+async def get_pending_reviews(
+    db: SignalDatabase = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    return await db.get_pending_reviews()
 
 
 @app.post("/api/review/{evaluation_id}")
 async def record_review(
     evaluation_id: str,
-    decision: str,
-    feedback: str,
-    reviewed_by: str
-) -> Dict[str, str]:
-    """Record expert review decision"""
-    db.record_expert_review(evaluation_id, decision, feedback, reviewed_by)
-    return {"status": "review_recorded"}
+    body: ReviewRequest,
+    db: SignalDatabase = Depends(get_db),
+) -> dict:
+    await db.record_expert_review(evaluation_id, body.decision, body.feedback, body.reviewed_by)
+    return {"status": "review_recorded", "evaluation_id": evaluation_id}
 
 
 @app.get("/api/signals/stats")
-async def get_signal_stats() -> Dict[str, Any]:
-    """Get signal routing statistics"""
-    return db.get_signal_statistics()
+async def get_signal_stats(
+    db: SignalDatabase = Depends(get_db),
+) -> Dict[str, Any]:
+    return await db.get_signal_statistics()
 
 
 @app.get("/api/health")
-async def health_check():
-    """Health check"""
-    return {"status": "healthy", "router": "expert-signal-router"}
+async def health_check() -> dict:
+    return {"status": "healthy", "service": "expert-signal-router"}

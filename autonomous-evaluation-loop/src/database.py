@@ -1,127 +1,129 @@
-"""Autonomous Evaluation Loop - Database Layer"""
-import sqlite3
-from typing import List, Dict, Any
+"""Autonomous Evaluation Loop - Asynchronous Database Layer"""
+
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
-try:
-    from .models import EvaluationSignal, EvaluationResult, SignalDriftReport, SignalType, SignalStatus
-except ImportError:
-    import sys
-    import os
-    sys.path.insert(0, os.path.dirname(__file__))
-    from models import EvaluationSignal, EvaluationResult, SignalDriftReport, SignalType, SignalStatus
+from shared.async_db import AsyncDatabase
+from .models import EvaluationSignal, EvaluationResult, SignalDriftReport, SignalType, SignalStatus
 
 
 class EvaluationDatabase:
-    def __init__(self, db_path: str = "evaluations.db"):
-        self.db_path = db_path
-        self._init()
-    
-    def _init(self):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS signals (
-                    signal_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    signal_type TEXT NOT NULL,
-                    threshold REAL NOT NULL,
-                    status TEXT DEFAULT 'active',
-                    correlation_coefficient REAL DEFAULT 0.0,
-                    p_value REAL DEFAULT 1.0,
-                    last_updated TEXT
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS evaluation_results (
-                    id TEXT PRIMARY KEY,
-                    recipe_id TEXT NOT NULL,
-                    signal_id TEXT NOT NULL,
-                    score REAL NOT NULL,
-                    passed INTEGER NOT NULL,
-                    timestamp TEXT,
-                    FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
-                )
-            """)
-            conn.commit()
-    
-    def create_signal(self, signal: EvaluationSignal) -> str:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (signal.signal_id, signal.name, signal.signal_type.value, 
-                 signal.threshold, signal.status.value, signal.correlation_coefficient,
-                 signal.p_value, signal.last_updated.isoformat())
-            )
-            conn.commit()
-            return signal.signal_id
-    
-    def run_evaluation(self, recipe_id: str, signal: EvaluationSignal, score: float) -> EvaluationResult:
+    def __init__(self, db_path: str = ":memory:"):
+        self._db = AsyncDatabase(db_path)
+        self._initialized = False
+
+    async def _init_schema(self) -> None:
+        if self._initialized:
+            return
+        await self._db.executescript("""
+            CREATE TABLE IF NOT EXISTS signals (
+                signal_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                threshold REAL NOT NULL,
+                status TEXT DEFAULT 'active',
+                correlation_coefficient REAL DEFAULT 0.0,
+                p_value REAL DEFAULT 1.0,
+                last_updated TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS evaluation_results (
+                id TEXT PRIMARY KEY,
+                recipe_id TEXT NOT NULL,
+                signal_id TEXT NOT NULL,
+                score REAL NOT NULL,
+                passed INTEGER NOT NULL,
+                timestamp TEXT,
+                FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
+            );
+        """)
+        self._initialized = True
+
+    async def create_signal(self, signal: EvaluationSignal) -> str:
+        await self._init_schema()
+        await self._db.execute(
+            "INSERT INTO signals VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                signal.signal_id, signal.name, signal.signal_type.value,
+                signal.threshold, signal.status.value, signal.correlation_coefficient,
+                signal.p_value, signal.last_updated.isoformat(),
+            ),
+        )
+        await self._db.commit()
+        return signal.signal_id
+
+    async def run_evaluation(self, recipe_id: str, signal: EvaluationSignal, score: float) -> EvaluationResult:
+        await self._init_schema()
         result_id = f"result-{recipe_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         passed = score >= signal.threshold
-        
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT INTO evaluation_results (id, recipe_id, signal_id, score, passed, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-                (result_id, recipe_id, signal.signal_id, score, int(passed), datetime.now().isoformat())
-            )
-            conn.commit()
-        
+
+        await self._db.execute(
+            "INSERT INTO evaluation_results (id, recipe_id, signal_id, score, passed, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+            (result_id, recipe_id, signal.signal_id, score, int(passed), datetime.now().isoformat()),
+        )
+        await self._db.commit()
+
         return EvaluationResult(
             recipe_id=recipe_id,
             signal_id=signal.signal_id,
             score=score,
-            passed=passed
+            passed=passed,
         )
-    
-    def detect_drift(self, signal_id: str, lookback_days: int = 30) -> SignalDriftReport:
-        with sqlite3.connect(self.db_path) as conn:
-            # Get current correlation
-            signal = conn.execute("SELECT * FROM signals WHERE signal_id=?", (signal_id,)).fetchone()
-            if not signal:
-                return None
-            
-            old_correlation = signal[5]
-            
-            # Calculate new correlation from recent results
-            cutoff = (datetime.now() - timedelta(days=lookback_days)).isoformat()
-            cursor = conn.execute(
-                "SELECT AVG(score), COUNT(*) FROM evaluation_results WHERE signal_id=? AND timestamp>=?",
-                (signal_id, cutoff)
+
+    async def detect_drift(self, signal_id: str, lookback_days: int = 30) -> Optional[SignalDriftReport]:
+        await self._init_schema()
+        signal_row = await self._db.fetchone(
+            "SELECT * FROM signals WHERE signal_id=?", (signal_id,)
+        )
+        if not signal_row:
+            return None
+
+        old_correlation = signal_row["correlation_coefficient"]
+        cutoff = (datetime.now() - timedelta(days=lookback_days)).isoformat()
+
+        row = await self._db.fetchone(
+            "SELECT AVG(score) AS avg_score, COUNT(*) AS cnt FROM evaluation_results WHERE signal_id=? AND timestamp>=?",
+            (signal_id, cutoff),
+        )
+
+        if row and row["cnt"] and row["cnt"] > 0:
+            new_correlation = row["avg_score"]
+            drift = abs(old_correlation - new_correlation)
+            drift_detected = drift > 0.2
+            status = "drifting" if drift_detected else "active"
+            action = "review_required" if drift_detected else "continue_monitoring"
+
+            await self._db.execute(
+                "UPDATE signals SET status=?, correlation_coefficient=?, last_updated=? WHERE signal_id=?",
+                (status, new_correlation, datetime.now().isoformat(), signal_id),
             )
-            row = cursor.fetchone()
-            
-            if row and row[1] and row[1] > 0:
-                new_correlation = row[0]
-                drift = abs(old_correlation - new_correlation)
-                drift_detected = drift > 0.2
-                
-                status = "drifting" if drift_detected else "active"
-                action = "review_required" if drift_detected else "continue_monitoring"
-                
-                # Update signal
-                conn.execute(
-                    "UPDATE signals SET status=?, correlation_coefficient=?, last_updated=? WHERE signal_id=?",
-                    (status, new_correlation, datetime.now().isoformat(), signal_id)
-                )
-                conn.commit()
-                
-                return SignalDriftReport(
-                    signal_id=signal_id,
-                    old_correlation=old_correlation,
-                    new_correlation=new_correlation,
-                    drift_detected=drift_detected,
-                    recommended_action=action
-                )
-        
+            await self._db.commit()
+
+            return SignalDriftReport(
+                signal_id=signal_id,
+                old_correlation=old_correlation,
+                new_correlation=new_correlation,
+                drift_detected=drift_detected,
+                recommended_action=action,
+            )
+
         return None
-    
-    def get_signals(self) -> List[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.execute("SELECT * FROM signals")
-            return [dict(zip([d[0] for d in cursor.description], row)) for row in cursor.fetchall()]
-    
-    def get_evaluation_stats(self) -> Dict[str, Any]:
-        with sqlite3.connect(self.db_path) as conn:
-            total = conn.execute("SELECT COUNT(*) FROM evaluation_results").fetchone()[0]
-            passed = conn.execute("SELECT COUNT(*) FROM evaluation_results WHERE passed=1").fetchone()[0]
-            return {"total": total, "passed": passed, "pass_rate": passed/total if total > 0 else 0}
+
+    async def get_signals(self) -> List[Dict[str, Any]]:
+        await self._init_schema()
+        return await self._db.fetchall("SELECT * FROM signals")
+
+    async def get_signal(self, signal_id: str) -> Optional[Dict[str, Any]]:
+        await self._init_schema()
+        return await self._db.fetchone("SELECT * FROM signals WHERE signal_id=?", (signal_id,))
+
+    async def get_evaluation_stats(self) -> Dict[str, Any]:
+        await self._init_schema()
+        total_row = await self._db.fetchone("SELECT COUNT(*) AS cnt FROM evaluation_results")
+        total = total_row["cnt"] if total_row else 0
+        passed_row = await self._db.fetchone("SELECT COUNT(*) AS cnt FROM evaluation_results WHERE passed=1")
+        passed = passed_row["cnt"] if passed_row else 0
+        return {"total": total, "passed": passed, "pass_rate": passed / total if total > 0 else 0.0}
+
+    async def close(self) -> None:
+        await self._db.close()

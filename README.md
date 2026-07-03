@@ -251,15 +251,18 @@ Recipe updated for future fine-tuning
 git clone https://github.com/kliewerdaniel/sovereign-intelligence-observatory.git
 cd sovereign-intelligence-observatory
 
-# Install dependencies
-pip install fastapi uvicorn httpx pytest
+# Create virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
-# Run verification
-python3 verify-recipe-compiler.py
-python3 verify-signal-router.py
-python3 verify-eval-loop.py
-python3 verify-apprenticeship.py
-python3 verify-observatory.py
+# Install dependencies
+pip install -e ".[all]"
+
+# Or install minimal
+pip install fastapi uvicorn aiosqlite pydantic httpx pytest pytest-asyncio
+
+# Run tests
+./run_tests.sh
 ```
 
 ---
@@ -328,22 +331,22 @@ python3 verify-observatory.py
 
 ## 🧪 Testing
 
-All components are fully tested and verified:
+All components have comprehensive pytest suites with FastAPI `TestClient`:
 
 ```bash
-# Test each component individually
-python3 verify-recipe-compiler.py
-python3 verify-signal-router.py
-python3 verify-eval-loop.py
-python3 verify-apprenticeship.py
-python3 verify-observatory.py
+# Run all tests via the test runner
+./run_tests.sh
 
-# Expected output:
-# ✅ Agent Recipe Compiler VERIFIED
-# ✅ Expert Signal Router VERIFIED
-# ✅ Autonomous Evaluation Loop VERIFIED
-# ✅ Sovereign Apprenticeship Engine VERIFIED
-# ✅ Intelligence Observatory VERIFIED
+# Or test individual components
+pytest agent-recipe-compiler/tests/
+cd expert-signal-router && pytest tests/
+cd autonomous-evaluation-loop && pytest tests/
+cd sovereign-apprenticeship && pytest tests/
+cd intelligence-observatory && pytest tests/
+cd tacit-judgment-extractor && pytest tests/
+pytest tests/test_shared_infrastructure.py
+
+# Expected: 75+ tests, all passing
 ```
 
 ---
@@ -381,24 +384,21 @@ python3 verify-observatory.py
 
 ## 🔮 Future Extensions
 
-### Tacit Judgment Extractor (6th Component)
+### 6. 🧠 Tacit Judgment Extractor
 
-*Coming soon.* Extracts unarticulated expertise from expert decision-making sessions and converts it into trainable model capabilities.
-
-This is the hardest component — it borders on research rather than engineering. Build all other components first, as you'll need recipes and expert evaluations to learn from.
+Extracts unarticulated expertise from expert decision-making sessions and converts it into trainable decision trees.
 
 **What it does:**
-- Records expert decision-making sessions (audio/video/text)
-- Uses local LLMs to identify tacit patterns in expert reasoning
+- Records expert decision-making sessions (text-based)
+- Uses local LLMs (Ollama) to identify tacit patterns in expert reasoning
 - Generates structured decision trees capturing unarticulated expertise
-- Creates synthetic training examples from tacit patterns
-- Builds domain-specific judgment models via fine-tuning
+- Exports decision trees as JSON schemas
+- Rule-based fallback extraction when Ollama is unavailable
 
 **Skills needed:**
-- Audio/video processing
 - Pattern recognition
-- Fine-tuning workflows
-- Research methodologies
+- LLM integration (Ollama)
+- Decision tree modeling
 
 ---
 

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "sovereign-intelligence-observatory"
+version = "2.0.0"
+description = "Local-first telemetry and evaluation server for sovereign AI systems"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "aiosqlite>=0.19.0",
+    "httpx>=0.25.0",
+]
+
+[project.optional-dependencies]
+ollama = ["httpx>=0.25.0"]
+chroma = ["chromadb>=0.4.0"]
+test = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.25.0",
+]
+all = [
+    "chromadb>=0.4.0",
+    "httpx>=0.25.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = [
+    "agent-recipe-compiler/tests",
+    "expert-signal-router/tests",
+    "autonomous-evaluation-loop/tests",
+    "sovereign-apprenticeship/tests",
+    "intelligence-observatory/tests",
+    "tacit-judgment-extractor/tests",
+    "tests",
+]

@@ -1,62 +1,96 @@
 """Autonomous Evaluation Loop - HTTP API"""
-from fastapi import FastAPI, HTTPException
+
 from typing import List, Dict, Any
+from fastapi import FastAPI, HTTPException, Depends
 
+from .models import SignalCreate, EvaluateRequest, EvaluateResponse, SignalResponse, DriftRequest, DriftReport, EvaluationStats
 from .database import EvaluationDatabase
-from .models import EvaluationSignal, SignalType
+from .models import EvaluationSignal, SignalType, SignalStatus
 
-app = FastAPI(title="Autonomous Evaluation Loop", version="1.0.0")
-db = EvaluationDatabase()
+app = FastAPI(title="Autonomous Evaluation Loop", version="2.0.0")
 
 
-@app.post("/api/signals")
-async def create_signal(signal_data: Dict[str, Any]) -> Dict[str, str]:
-    """Create a new evaluation signal"""
+async def get_db() -> EvaluationDatabase:
+    db = EvaluationDatabase()
+    yield db
+    await db.close()
+
+
+@app.post("/api/signals", status_code=201)
+async def create_signal(
+    body: SignalCreate,
+    db: EvaluationDatabase = Depends(get_db),
+) -> dict:
     signal = EvaluationSignal(
-        signal_id=signal_data["signal_id"],
-        name=signal_data["name"],
-        signal_type=SignalType(signal_data["signal_type"]),
-        threshold=signal_data["threshold"]
+        signal_id=body.signal_id,
+        name=body.name,
+        signal_type=body.signal_type,
+        threshold=body.threshold,
     )
-    signal_id = db.create_signal(signal)
+    signal_id = await db.create_signal(signal)
     return {"signal_id": signal_id, "status": "created"}
 
 
-@app.post("/api/evaluate/{recipe_id}")
-async def evaluate_recipe(recipe_id: str, signal_id: str, score: float) -> Dict[str, Any]:
-    """Run evaluation on a recipe"""
-    signals = db.get_signals()
-    signal = next((s for s in signals if s["signal_id"] == signal_id), None)
-    
-    if not signal:
-        raise HTTPException(status_code=404, detail="Signal not found")
-    
-    result = db.run_evaluation(recipe_id, signal, score)
-    return {"result_id": f"result-{recipe_id}-{result.timestamp.strftime('%Y%m%d%H%M%S')}", "passed": result.passed}
+@app.post("/api/evaluate/{recipe_id}", response_model=EvaluateResponse)
+async def evaluate_recipe(
+    recipe_id: str,
+    body: EvaluateRequest,
+    db: EvaluationDatabase = Depends(get_db),
+) -> EvaluateResponse:
+    signal_row = await db.get_signal(body.signal_id)
+    if not signal_row:
+        raise HTTPException(status_code=404, detail=f"Signal not found: {body.signal_id}")
+
+    signal = EvaluationSignal(
+        signal_id=signal_row["signal_id"],
+        name=signal_row["name"],
+        signal_type=SignalType(signal_row["signal_type"]),
+        threshold=signal_row["threshold"],
+    )
+    result = await db.run_evaluation(recipe_id, signal, body.score)
+    return EvaluateResponse(
+        result_id=f"result-{recipe_id}-{result.timestamp.strftime('%Y%m%d%H%M%S')}",
+        recipe_id=recipe_id,
+        signal_id=body.signal_id,
+        score=body.score,
+        passed=result.passed,
+    )
 
 
-@app.get("/api/signals/drift/{signal_id}")
-async def check_signal_drift(signal_id: str, lookback_days: int = 30) -> Dict[str, Any]:
-    """Check for signal drift"""
-    drift_report = db.detect_drift(signal_id, lookback_days)
+@app.get("/api/signals/drift/{signal_id}", response_model=DriftReport)
+async def check_signal_drift(
+    signal_id: str,
+    lookback_days: int = 30,
+    db: EvaluationDatabase = Depends(get_db),
+) -> DriftReport:
+    drift_report = await db.detect_drift(signal_id, lookback_days)
     if not drift_report:
-        raise HTTPException(status_code=404, detail="Signal not found")
-    return drift_report.__dict__
+        raise HTTPException(status_code=404, detail=f"Signal not found: {signal_id}")
+    return DriftReport(
+        signal_id=drift_report.signal_id,
+        old_correlation=drift_report.old_correlation,
+        new_correlation=drift_report.new_correlation,
+        drift_detected=drift_report.drift_detected,
+        recommended_action=drift_report.recommended_action,
+    )
 
 
-@app.get("/api/signals")
-async def list_signals() -> List[Dict[str, Any]]:
-    """List all evaluation signals"""
-    return db.get_signals()
+@app.get("/api/signals", response_model=List[SignalResponse])
+async def list_signals(
+    db: EvaluationDatabase = Depends(get_db),
+) -> List[SignalResponse]:
+    signals = await db.get_signals()
+    return [SignalResponse(**s) for s in signals]
 
 
-@app.get("/api/evaluations/stats")
-async def get_evaluation_stats() -> Dict[str, Any]:
-    """Get evaluation statistics"""
-    return db.get_evaluation_stats()
+@app.get("/api/evaluations/stats", response_model=EvaluationStats)
+async def get_evaluation_stats(
+    db: EvaluationDatabase = Depends(get_db),
+) -> EvaluationStats:
+    stats = await db.get_evaluation_stats()
+    return EvaluationStats(**stats)
 
 
 @app.get("/api/health")
-async def health_check():
-    """Health check"""
+async def health_check() -> dict:
     return {"status": "healthy", "service": "autonomous-evaluation-loop"}
