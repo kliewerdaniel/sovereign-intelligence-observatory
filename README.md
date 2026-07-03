@@ -10,7 +10,7 @@ The Sovereign Intelligence Observatory is a complete local-first AI observabilit
 
 This project implements concepts from **Sovereign AI: Building Local-First Intelligent Systems** by Daniel Kliewer.
 
-**Get the book on Amazon →** [Sovereign AI - $88](https://www.amazon.com/Sovereign-AI-Building-Local-First-Intelligent/dp/0997527713)
+**Get the book on Amazon →** [Sovereign AI - $88](https://www.amazon.com/dp/B0H6RB7D9J)
 
 **72 Pages | 11 Chapters | 10+ Projects**
 
@@ -19,7 +19,7 @@ This project implements concepts from **Sovereign AI: Building Local-First Intel
 ## 🔗 Links
 
 - **Website:** [danielkliewer.com](https://www.danielkliewer.com)
-- **Book:** [Sovereign AI on Amazon](https://www.amazon.com/Sovereign-AI-Building-Local-First-Intelligent/dp/0997527713)
+- **Book:** [Sovereign AI on Amazon](https://www.amazon.com/dp/B0H6RB7D9J)
 - **Blog:** [danielkliewer.com/blog](https://www.danielkliewer.com/blog)
 - **GitHub:** [kliewerdaniel](https://github.com/kliewerdaniel)
 - **All 222 Repos →** [GitHub Projects](https://github.com/kliewerdaniel)
@@ -363,7 +363,7 @@ python3 verify-observatory.py
 - RLHF & Evaluation
 - Security
 
-**Buy the book →** [Sovereign AI on Amazon](https://www.amazon.com/Sovereign-AI-Building-Local-First-Intelligent/dp/0997527713)
+**Buy the book →** [Sovereign AI on Amazon](https://www.amazon.com/dp/B0H6RB7D9J)
 
 ### Related Blog Posts
 
@@ -444,7 +444,7 @@ Built with concepts from **Sovereign AI: Building Local-First Intelligent System
 
 - **Website:** [danielkliewer.com](https://www.danielkliewer.com)
 - **GitHub:** [@kliewerdaniel](https://github.com/kliewerdaniel)
-- **Book:** [Sovereign AI on Amazon](https://www.amazon.com/Sovereign-AI-Building-Local-First-Intelligent/dp/0997527713)
+- **Book:** [Sovereign AI on Amazon](https://www.amazon.com/dp/B0H6RB7D9J)
 
 ---
 
@@ -456,6 +456,6 @@ Built with concepts from **Sovereign AI: Building Local-First Intelligent System
 
 <div align="center">
 
-**[⭐ Star this repo](#)** | **[📖 Get the Book](https://www.amazon.com/Sovereign-AI-Building-Local-First-Intelligent/dp/0997527713)** | **[🌐 Visit Website](https://www.danielkliewer.com)**
+**[⭐ Star this repo](#)** | **[📖 Get the Book](https://www.amazon.com/dp/B0H6RB7D9J)** | **[🌐 Visit Website](https://www.danielkliewer.com)**
 
 </div>
