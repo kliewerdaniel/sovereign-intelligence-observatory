@@ -6,6 +6,7 @@ correlations.
 """
 
 import logging
+from string import Template
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,7 +25,7 @@ async def get_db():
     await db.close()
 
 
-DASHBOARD_TEMPLATE = """<!DOCTYPE html>
+DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -32,28 +33,28 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 <title>Sovereign Intelligence Observatory - Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
-* {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; padding: 24px; }}
-h1 {{ color: #58a6ff; margin-bottom: 24px; }}
-h2 {{ color: #8b949e; margin-bottom: 12px; font-size: 18px; }}
-.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 24px; }}
-.card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }}
-.card-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }}
-.chart-container {{ position: relative; height: 280px; }}
-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
-th, td {{ text-align: left; padding: 8px 12px; border-bottom: 1px solid #21262d; }}
-th {{ color: #8b949e; font-weight: 600; }}
-tr:hover {{ background: #1c2128; }}
-.badge {{ display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }}
-.badge-declining {{ background: #d73a4a33; color: #f85149; border: 1px solid #d73a4a55; }}
-.badge-stable {{ background: #58a6ff33; color: #58a6ff; border: 1px solid #58a6ff55; }}
-.badge-improving {{ background: #3fb95033; color: #3fb950; border: 1px solid #3fb95055; }}
-.stats-bar {{ display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }}
-.stat {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px 24px; min-width: 140px; }}
-.stat-label {{ color: #8b949e; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }}
-.stat-value {{ color: #c9d1d9; font-size: 28px; font-weight: 700; margin-top: 4px; }}
-.error {{ color: #f85149; padding: 24px; text-align: center; }}
-.loading {{ color: #8b949e; padding: 24px; text-align: center; }}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; padding: 24px; }
+h1 { color: #58a6ff; margin-bottom: 24px; }
+h2 { color: #8b949e; margin-bottom: 12px; font-size: 18px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 24px; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
+.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.chart-container { position: relative; height: 280px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #21262d; }
+th { color: #8b949e; font-weight: 600; }
+tr:hover { background: #1c2128; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+.badge-declining { background: #d73a4a33; color: #f85149; border: 1px solid #d73a4a55; }
+.badge-stable { background: #58a6ff33; color: #58a6ff; border: 1px solid #58a6ff55; }
+.badge-improving { background: #3fb95033; color: #3fb950; border: 1px solid #3fb95055; }
+.stats-bar { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+.stat { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px 24px; min-width: 140px; }
+.stat-label { color: #8b949e; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-value { color: #c9d1d9; font-size: 28px; font-weight: 700; margin-top: 4px; }
+.error { color: #f85149; padding: 24px; text-align: center; }
+.loading { color: #8b949e; padding: 24px; text-align: center; }
 </style>
 </head>
 <body>
@@ -103,20 +104,20 @@ tr:hover {{ background: #1c2128; }}
   </div>
 </div>
 <script>
-async function fetchJSON(url) {{
+async function fetchJSON(url) {
   const resp = await fetch(url);
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   return resp.json();
-}}
+}
 
-function fmt(v) {{
+function fmt(v) {
   if (v === null || v === undefined) return '-';
   if (typeof v === 'number') return v.toFixed(2);
   return String(v);
-}}
+}
 
-async function init() {{
-  try {{
+async function init() {
+  try {
     const [stats, timeline, prompts, signals, capabilities, memories] = await Promise.all([
       fetchJSON('/api/observatory/stats'),
       fetchJSON('/api/timeline/2000-01-01/2099-12-31'),
@@ -133,71 +134,71 @@ async function init() {{
     document.getElementById('stat-capability').textContent = stats.capability_changes || 
       ((capabilities.regressions?.length || 0) + (capabilities.improvements?.length || 0));
 
-    if (timeline.length) {{
+    if (timeline.length) {
       const labels = timeline.map(e => e.date || '');
       const recipeCounts = timeline.map(e => e.recipe_count || 0);
       const capIndices = timeline.map(e => e.capability_index || 1.0);
 
-      new Chart(document.getElementById('timelineChart'), {{
+      new Chart(document.getElementById('timelineChart'), {
         type: 'bar',
-        data: {{ labels, datasets: [{{ label: 'Recipes', data: recipeCounts, backgroundColor: '#58a6ff88', borderColor: '#58a6ff', borderWidth: 1 }}] }},
-        options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ display: false }} }},
-          scales: {{ x: {{ ticks: {{ color: '#8b949e' }} }}, y: {{ beginAtZero: true, ticks: {{ color: '#8b949e' }} }} }} }}
-      }});
+        data: { labels, datasets: [{ label: 'Recipes', data: recipeCounts, backgroundColor: '#58a6ff88', borderColor: '#58a6ff', borderWidth: 1 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+          scales: { x: { ticks: { color: '#8b949e' } }, y: { beginAtZero: true, ticks: { color: '#8b949e' } } } }
+      });
 
-      new Chart(document.getElementById('capabilityChart'), {{
+      new Chart(document.getElementById('capabilityChart'), {
         type: 'line',
-        data: {{ labels, datasets: [{{ label: 'Capability Index', data: capIndices, borderColor: '#3fb950', backgroundColor: '#3fb95033', fill: true, tension: 0.3 }}] }},
-        options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ display: false }} }},
-          scales: {{ x: {{ ticks: {{ color: '#8b949e' }} }}, y: {{ min: 0, ticks: {{ color: '#8b949e' }} }} }} }}
-      }});
-    }}
+        data: { labels, datasets: [{ label: 'Capability Index', data: capIndices, borderColor: '#3fb950', backgroundColor: '#3fb95033', fill: true, tension: 0.3 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+          scales: { x: { ticks: { color: '#8b949e' } }, y: { min: 0, ticks: { color: '#8b949e' } } } }
+      });
+    }
 
-    if (prompts.length) {{
+    if (prompts.length) {
       document.getElementById('prompts-table').innerHTML = prompts.map(p => 
         '<tr><td>' + fmt(p.prompt_name || p.prompt_id) + '</td><td>' + p.usage_count + '</td><td>' + fmt(p.avg_relevance) + '</td>' +
         '<td><span class="badge badge-' + (p.trend || 'stable') + '">' + (p.trend || 'stable') + '</span></td></tr>'
       ).join('');
-    }}
+    }
 
-    if (signals.length) {{
+    if (signals.length) {
       document.getElementById('signals-table').innerHTML = signals.map(s =>
         '<tr><td>' + fmt(s.signal_name) + '</td><td>' + fmt(s.correlation_coefficient) + '</td><td>' + fmt(s.p_value) + '</td>' +
         '<td>' + (s.significance || 'not_significant').replace('_', ' ') + '</td></tr>'
       ).join('');
-    }}
+    }
 
-    if (capabilities && (capabilities.regressions?.length || capabilities.improvements?.length)) {{
+    if (capabilities && (capabilities.regressions?.length || capabilities.improvements?.length)) {
       let html = '';
-      if (capabilities.regressions?.length) {{
-        html += '<h3 style=\"color:#f85149;margin-bottom:8px;\">Regressions (' + capabilities.regressions.length + ')</h3>';
+      if (capabilities.regressions?.length) {
+        html += '<h3 style="color:#f85149;margin-bottom:8px;">Regressions (' + capabilities.regressions.length + ')</h3>';
         html += '<table><thead><tr><th>Task</th><th>Score Change</th><th>Severity</th></tr></thead><tbody>';
         html += capabilities.regressions.map(c =>
-          '<tr><td>' + fmt(c.task) + '</td><td style=\"color:#f85149;\">' + fmt(c.score_change) + '</td><td>' + (c.severity || 'low') + '</td></tr>'
+          '<tr><td>' + fmt(c.task) + '</td><td style="color:#f85149;">' + fmt(c.score_change) + '</td><td>' + (c.severity || 'low') + '</td></tr>'
         ).join('');
         html += '</tbody></table>';
-      }}
-      if (capabilities.improvements?.length) {{
-        html += '<h3 style=\"color:#3fb950;margin-top:16px;margin-bottom:8px;\">Improvements (' + capabilities.improvements.length + ')</h3>';
+      }
+      if (capabilities.improvements?.length) {
+        html += '<h3 style="color:#3fb950;margin-top:16px;margin-bottom:8px;">Improvements (' + capabilities.improvements.length + ')</h3>';
         html += '<table><thead><tr><th>Task</th><th>Score Change</th><th>Severity</th></tr></thead><tbody>';
         html += capabilities.improvements.map(c =>
-          '<tr><td>' + fmt(c.task) + '</td><td style=\"color:#3fb950;\">+' + fmt(Math.abs(c.score_change)) + '</td><td>' + (c.severity || 'low') + '</td></tr>'
+          '<tr><td>' + fmt(c.task) + '</td><td style="color:#3fb950;">+' + fmt(Math.abs(c.score_change)) + '</td><td>' + (c.severity || 'low') + '</td></tr>'
         ).join('');
         html += '</tbody></table>';
-      }}
+      }
       document.getElementById('capability-content').innerHTML = html;
-    }}
+    }
 
-    if (memories.length) {{
+    if (memories.length) {
       document.getElementById('memories-table').innerHTML = memories.map(m =>
         '<tr><td>' + fmt(m.title || m.memory_id) + '</td><td>' + (m.usage_count || 0) + '</td><td>' + (m.last_retrieved || '-') + '</td></tr>'
       ).join('');
-    }}
-  }} catch (err) {{
+    }
+  } catch (err) {
     document.querySelectorAll('.loading, .stat-value').forEach(el => el.textContent = 'Error: ' + err.message);
-    document.querySelectorAll('tbody').forEach(tb => tb.innerHTML = '<tr><td colspan=\"4\" class=\"error\">Failed to load data: ' + err.message + '</td></tr>');
-  }}
-}}
+    document.querySelectorAll('tbody').forEach(tb => tb.innerHTML = '<tr><td colspan="4" class="error">Failed to load data: ' + err.message + '</td></tr>');
+  }
+}
 
 init();
 </script>
@@ -207,12 +208,4 @@ init();
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(db: ObservatoryDatabase = Depends(get_db)) -> HTMLResponse:
-    try:
-        stats = await db.get_observatory_stats()
-    except Exception:
-        stats = {}
-
-    html = DASHBOARD_TEMPLATE.format(
-        **stats,
-    )
-    return HTMLResponse(content=html, status_code=200)
+    return HTMLResponse(content=DASHBOARD_HTML, status_code=200)

@@ -42,12 +42,16 @@ async def record_action(
     body: ActionRecord,
     db: ApprenticeshipDatabase = Depends(get_db),
 ) -> ActionResponse:
-    await db.record_action(agent_id, body.monitored, body.quality_score)
+    result = await db.record_action(agent_id, body.monitored, body.quality_score)
     state = await db.get_or_create_state(agent_id)
     return ActionResponse(
         current_level=state.level.value,
         autonomy_budget_remaining=state.autonomy_budget_remaining,
         autonomy_debt=state.autonomy_debt,
+        action_cost=result["action_cost"],
+        budget_used_today=result["budget_used_today"],
+        budget_daily_limit=result["budget_daily_limit"],
+        budget_exceeded=result["budget_exceeded"],
     )
 
 
@@ -89,10 +93,13 @@ async def get_budget(
     db: ApprenticeshipDatabase = Depends(get_db),
 ) -> BudgetResponse:
     state = await db.get_or_create_state(agent_id)
+    budget_row = await db._ensure_budget_row(agent_id)
     return BudgetResponse(
         agent_id=agent_id,
-        remaining=state.autonomy_budget_remaining,
-        used_today=state.total_actions - state.autonomy_budget_remaining,
+        daily_budget=budget_row["daily_budget"],
+        used_today=budget_row["used_today"],
+        remaining=max(0, budget_row["daily_budget"] - budget_row["used_today"]),
+        warnings=budget_row["warnings_issued"],
     )
 
 

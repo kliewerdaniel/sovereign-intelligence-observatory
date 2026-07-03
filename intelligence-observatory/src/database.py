@@ -25,6 +25,24 @@ class ObservatoryDatabase:
                 prompt_versions TEXT DEFAULT '[]'
             );
 
+            CREATE TABLE IF NOT EXISTS timeline_rollup_weekly (
+                week_start TEXT PRIMARY KEY,
+                week_end TEXT NOT NULL,
+                total_recipes INTEGER DEFAULT 0,
+                avg_capability_index REAL DEFAULT 0.0,
+                peak_score REAL DEFAULT 0.0,
+                lowest_score REAL DEFAULT 0.0
+            );
+
+            CREATE TABLE IF NOT EXISTS timeline_rollup_monthly (
+                month_start TEXT PRIMARY KEY,
+                month_end TEXT NOT NULL,
+                total_recipes INTEGER DEFAULT 0,
+                avg_capability_index REAL DEFAULT 0.0,
+                peak_score REAL DEFAULT 0.0,
+                lowest_score REAL DEFAULT 0.0
+            );
+
             CREATE TABLE IF NOT EXISTS obsolescent_prompts (
                 prompt_id TEXT PRIMARY KEY,
                 prompt_name TEXT NOT NULL,
@@ -78,12 +96,19 @@ class ObservatoryDatabase:
             if r.get("prompt_version"):
                 prompt_versions.add(f"v{r['prompt_version']}")
 
+        recipe_count = len(recipes)
+        version_diversity = (len(memory_versions) + len(prompt_versions)) / max(recipe_count, 1)
+        score_component = avg_score
+        diversity_component = min(version_diversity * 2.0, 0.3)
+        capability_index = round(score_component * 0.7 + diversity_component * 0.3, 4)
+        capability_index = max(0.0, min(1.0, capability_index))
+
         timeline_id = f"timeline-{date}"
         await self._db.execute(
             "INSERT OR REPLACE INTO intelligence_timeline VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                timeline_id, date, len(recipes), avg_score,
-                avg_score, self._db.serialize_json(list(memory_versions)),
+                timeline_id, date, recipe_count, avg_score,
+                capability_index, self._db.serialize_json(list(memory_versions)),
                 self._db.serialize_json(list(prompt_versions)),
             ),
         )
@@ -110,11 +135,59 @@ class ObservatoryDatabase:
         )
         await self._db.commit()
 
+    async def _refresh_rollups(self) -> None:
+        await self._init_schema()
+        rows = await self._db.fetchall(
+            "SELECT date, recipe_count, avg_score, capability_index FROM intelligence_timeline ORDER BY date ASC"
+        )
+        if not rows:
+            return
+
+        weekly: Dict[str, list] = {}
+        monthly: Dict[str, list] = {}
+        for r in rows:
+            parts = r["date"].split("-")
+            week_key = f"{parts[0]}-W{int(parts[2]) // 7 + 1:02d}"
+            month_key = f"{parts[0]}-{parts[1]}"
+            weekly.setdefault(week_key, []).append(r)
+            monthly.setdefault(month_key, []).append(r)
+
+        for week_key, group in weekly.items():
+            total = sum(g["recipe_count"] for g in group)
+            avg_cap = sum(g["capability_index"] for g in group) / len(group)
+            peak = max(g["avg_score"] for g in group)
+            low = min(g["avg_score"] for g in group)
+            start_date = group[0]["date"]
+            end_date = group[-1]["date"]
+            await self._db.execute(
+                "INSERT OR REPLACE INTO timeline_rollup_weekly VALUES (?, ?, ?, ?, ?, ?)",
+                (week_key, end_date, total, avg_cap, peak, low),
+            )
+
+        for month_key, group in monthly.items():
+            total = sum(g["recipe_count"] for g in group)
+            avg_cap = sum(g["capability_index"] for g in group) / len(group)
+            peak = max(g["avg_score"] for g in group)
+            low = min(g["avg_score"] for g in group)
+            start_date = group[0]["date"]
+            end_date = group[-1]["date"]
+            await self._db.execute(
+                "INSERT OR REPLACE INTO timeline_rollup_monthly VALUES (?, ?, ?, ?, ?, ?)",
+                (month_key, end_date, total, avg_cap, peak, low),
+            )
+        await self._db.commit()
+
+    async def get_timeline_rollup(self, granularity: str = "weekly") -> List[Dict[str, Any]]:
+        await self._init_schema()
+        table = "timeline_rollup_weekly" if granularity == "weekly" else "timeline_rollup_monthly"
+        return await self._db.fetchall(f"SELECT * FROM {table} ORDER BY week_start ASC" if granularity == "weekly" else f"SELECT * FROM {table} ORDER BY month_start ASC")
+
     async def get_obsolescent_prompts(self, lookback_days: int = 30) -> List[Dict[str, Any]]:
         await self._init_schema()
+        threshold = max(5, lookback_days // 5)
         return await self._db.fetchall(
-            "SELECT * FROM obsolescent_prompts WHERE usage_count < ? ORDER BY avg_relevance ASC LIMIT 50",
-            (lookback_days * 2,),
+            "SELECT * FROM obsolescent_prompts WHERE usage_count < ? AND avg_relevance < 0.3 ORDER BY avg_relevance ASC, usage_count ASC LIMIT 50",
+            (threshold,),
         )
 
     async def update_unused_memories(

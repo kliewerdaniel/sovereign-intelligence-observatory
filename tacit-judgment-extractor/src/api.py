@@ -6,8 +6,6 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Query, Depends
 
-import json
-
 from .models import (
     ExpertSessionCreate, SessionCreateResponse, SessionResponse,
     SessionCorrection, DecisionNode, DecisionTreeExport, TreeExportResponse,

@@ -42,6 +42,14 @@ async def record_review(
     return {"status": "review_recorded", "evaluation_id": evaluation_id}
 
 
+@app.get("/api/calibration/{objective}")
+async def get_calibration(
+    objective: str,
+    db: SignalDatabase = Depends(get_db),
+) -> Dict[str, Any]:
+    return await db.calculate_calibration(objective)
+
+
 @app.get("/api/signals/stats")
 async def get_signal_stats(
     db: SignalDatabase = Depends(get_db),

@@ -259,6 +259,7 @@ class TacitJudgmentPipeline:
         nodes: List[DecisionNode] = []
         corrections = session.get("corrections", [])
 
+        llm_nodes = []
         if self.ollama is not None and self.settings.enable_ollama:
             corrections_text = "\n".join(
                 f"Original: {c.get('original_text', '')} -> Corrected: {c.get('corrected_text', '')}"
@@ -282,7 +283,23 @@ class TacitJudgmentPipeline:
             )
 
             if response:
-                logger.debug("LLM decision tree response received (%d chars)", len(response))
+                try:
+                    parsed = json.loads(response)
+                    if isinstance(parsed, dict):
+                        parsed = [parsed]
+                    for item in parsed:
+                        if isinstance(item, dict) and "condition" in item:
+                            llm_nodes.append(DecisionNode(
+                                node_id=f"node-llm-{uuid4().hex[:8]}",
+                                parent_id=None,
+                                condition=item.get("condition", "LLM extracted decision"),
+                                action=item.get("action", "Take action based on condition"),
+                                confidence=float(item.get("confidence", 0.6)),
+                                rationale=item.get("rationale", item.get("description", "LLM extracted")),
+                                children=[],
+                            ))
+                except (json.JSONDecodeError, ValueError, TypeError) as exc:
+                    logger.debug("Failed to parse LLM decision tree: %s", exc)
 
         root_id = f"node-root-{uuid4().hex[:8]}"
         nodes.append(DecisionNode(
@@ -294,19 +311,24 @@ class TacitJudgmentPipeline:
             children=[],
         ))
 
-        for i, pattern in enumerate(patterns):
-            node_id = f"node-{uuid4().hex[:8]}"
-            if nodes:
+        if llm_nodes:
+            nodes[0].children.extend(n.node_id for n in llm_nodes)
+            for n in llm_nodes:
+                n.parent_id = root_id
+            nodes.extend(llm_nodes)
+        else:
+            for i, pattern in enumerate(patterns):
+                node_id = f"node-{uuid4().hex[:8]}"
                 nodes[0].children.append(node_id)
-            nodes.append(DecisionNode(
-                node_id=node_id,
-                parent_id=root_id if nodes else None,
-                condition=f"Pattern: {pattern.pattern_type} (confidence: {pattern.confidence:.2f})",
-                action=f"Apply rule: {pattern.description[:200]}",
-                confidence=pattern.confidence,
-                rationale=f"Extracted from {pattern.pattern_type} analysis",
-                children=[],
-            ))
+                nodes.append(DecisionNode(
+                    node_id=node_id,
+                    parent_id=root_id,
+                    condition=f"Pattern: {pattern.pattern_type} (confidence: {pattern.confidence:.2f})",
+                    action=f"Apply rule: {pattern.description[:200]}",
+                    confidence=pattern.confidence,
+                    rationale=f"Extracted from {pattern.pattern_type} analysis",
+                    children=[],
+                ))
 
         for node in nodes:
             await self.db.add_decision_node(session["session_id"], node)

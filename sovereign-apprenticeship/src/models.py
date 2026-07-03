@@ -42,6 +42,10 @@ class ActionResponse(BaseModel):
     current_level: str
     autonomy_budget_remaining: int
     autonomy_debt: float
+    action_cost: float = 0.0
+    budget_used_today: int = 0
+    budget_daily_limit: int = 100
+    budget_exceeded: bool = False
 
 
 class PromoteResponse(BaseModel):

@@ -33,6 +33,16 @@ class SignalDatabase:
                 expert_threshold REAL DEFAULT 0.5,
                 auto_approve_threshold REAL DEFAULT 0.95
             );
+
+            CREATE TABLE IF NOT EXISTS calibration_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                objective TEXT NOT NULL,
+                threshold_type TEXT NOT NULL,
+                old_value REAL NOT NULL,
+                new_value REAL NOT NULL,
+                error_rate REAL NOT NULL,
+                adjusted_at TEXT NOT NULL
+            );
         """)
         self._initialized = True
 
@@ -104,6 +114,61 @@ class SignalDatabase:
                 {"type": r["signal_type"], "count": r["count"], "avg_confidence": r["avg_confidence"]}
                 for r in by_signal
             ],
+        }
+
+    async def calculate_calibration(self, objective: str) -> Dict[str, Any]:
+        """Adjust thresholds based on historical error rates (dynamic calibration)."""
+        await self._init_schema()
+        error_rate = 0.0
+        total = 0
+        rejected = 0
+        if objective:
+            rows = await self._db.fetchall(
+                "SELECT decision FROM evaluations e JOIN routing_config c ON e.id = c.objective WHERE objective=?",
+                (objective,),
+            )
+        else:
+            rows = await self._db.fetchall("SELECT decision FROM evaluations")
+        if rows:
+            total = len(rows)
+            rejected = sum(1 for r in rows if r["decision"] == "rejected")
+            error_rate = rejected / total if total > 0 else 0.0
+
+        config = await self._db.fetchone(
+            "SELECT cheap_threshold, expert_threshold, auto_approve_threshold FROM routing_config WHERE objective = ?",
+            (objective,),
+        )
+        cheap, expert, auto_approve = (
+            (config["cheap_threshold"], config["expert_threshold"], config["auto_approve_threshold"])
+            if config else (0.8, 0.5, 0.95)
+        )
+
+        adjustments = {}
+        if error_rate > 0.2:
+            new_auto = min(1.0, auto_approve + 0.05)
+            new_cheap = min(1.0, cheap + 0.05)
+            new_expert = min(1.0, expert + 0.05)
+            adjustments = {
+                "auto_approve": {"old": auto_approve, "new": new_auto},
+                "cheap": {"old": cheap, "new": new_cheap},
+                "expert": {"old": expert, "new": new_expert},
+            }
+            await self._db.execute(
+                "INSERT INTO calibration_history (objective, threshold_type, old_value, new_value, error_rate, adjusted_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (objective, "all", auto_approve, new_auto, error_rate, datetime.now().isoformat()),
+            )
+            await self._db.execute(
+                "INSERT OR REPLACE INTO routing_config VALUES (?, ?, ?, ?)",
+                (objective, new_cheap, new_expert, new_auto),
+            )
+            await self._db.commit()
+
+        return {
+            "objective": objective,
+            "error_rate": round(error_rate, 4),
+            "total_evaluations": total,
+            "rejected": rejected,
+            "adjustments": adjustments,
         }
 
     async def set_routing_config(

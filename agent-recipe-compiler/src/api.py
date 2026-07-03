@@ -12,7 +12,7 @@ from typing import Optional, List
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query, Depends
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 import json
 
 from .models import RecipeInput, RecipeResponse, RecipeCaptureResponse, RecipeListResponse, RecipeStats, SearchResult, EvaluationMetadata
@@ -243,6 +243,35 @@ async def export_recipes(
                 row = {k: (json.dumps(v) if isinstance(v, (list, dict)) else v) for k, v in r.items()}
                 writer.writerow(row)
         return Response(content=output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=recipes_export.csv"})
+
+
+async def _recipe_stream(db: RecipeDatabase, limit: int = 50000):
+    """Yield JSON lines for all recipes as a stream."""
+    yield "["
+    first = True
+    offset = 0
+    while True:
+        batch, _ = await db.list_recipes(limit=100, offset=offset)
+        if not batch:
+            break
+        for r in batch:
+            if not first:
+                yield ","
+            first = False
+            yield json.dumps(RecipeResponse(**r).model_dump(), default=str)
+        offset += len(batch)
+    yield "]"
+
+
+@app.get("/api/recipes/export/stream")
+async def stream_export_recipes(
+    db: RecipeDatabase = Depends(get_db),
+) -> StreamingResponse:
+    return StreamingResponse(
+        _recipe_stream(db),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=recipes_stream.json"},
+    )
 
 
 @app.get("/api/recipes/{recipe_id}", response_model=RecipeResponse)

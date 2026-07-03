@@ -73,6 +73,44 @@ class ApprenticeshipDatabase:
             await self._save_state(state)
             return state
 
+    async def _ensure_budget_row(self, agent_id: str) -> Dict[str, Any]:
+        await self._init_schema()
+        row = await self._db.fetchone(
+            "SELECT * FROM autonomy_budgets WHERE agent_id=?", (agent_id,)
+        )
+        today = datetime.now().date().isoformat()
+        if row:
+            if row["reset_date"] < today:
+                await self._db.execute(
+                    "UPDATE autonomy_budgets SET used_today=0, reset_date=?, warnings_issued=0 WHERE agent_id=?",
+                    (today, agent_id),
+                )
+                await self._db.commit()
+                row = await self._db.fetchone(
+                    "SELECT * FROM autonomy_budgets WHERE agent_id=?", (agent_id,)
+                )
+            return row
+        else:
+            await self._db.execute(
+                "INSERT INTO autonomy_budgets (agent_id, daily_budget, used_today, reset_date, warnings_issued) VALUES (?, 100, 0, ?, 0)",
+                (agent_id, today),
+            )
+            await self._db.commit()
+            return {"agent_id": agent_id, "daily_budget": 100, "used_today": 0, "reset_date": today, "warnings_issued": 0}
+
+    def _compute_action_cost(self, monitored: bool, level: AutonomyLevel) -> float:
+        base_costs = {
+            AutonomyLevel.FULLY_SUPERVISED: 1.0,
+            AutonomyLevel.APPROVE_DANGEROUS: 0.8,
+            AutonomyLevel.APPROVE_NOVEL: 0.5,
+            AutonomyLevel.APPROVE_UNCERTAIN: 0.3,
+            AutonomyLevel.FULLY_AUTONOMOUS: 0.1,
+        }
+        cost = base_costs.get(level, 1.0)
+        if monitored:
+            cost *= 1.5
+        return round(cost, 4)
+
     async def _save_state(self, state: AutonomyState) -> None:
         await self._db.execute(
             "INSERT OR REPLACE INTO autonomy_states VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -85,20 +123,38 @@ class ApprenticeshipDatabase:
         )
         await self._db.commit()
 
-    async def record_action(self, agent_id: str, monitored: bool, quality_score: float) -> None:
+    async def record_action(self, agent_id: str, monitored: bool, quality_score: float) -> Dict[str, Any]:
         await self._init_schema()
         state = await self.get_or_create_state(agent_id)
         state.total_actions += 1
         if monitored:
             state.monitored_actions += 1
 
+        action_cost = self._compute_action_cost(monitored, state.level)
+        budget = await self._ensure_budget_row(agent_id)
+        new_used = budget["used_today"] + 1
+        budget_exceeded = new_used > budget["daily_budget"]
+
         if not monitored and quality_score < 0.7:
             state.autonomy_debt += (1.0 - quality_score)
 
         if state.autonomy_debt > 2.0:
             await self._demote_agent(agent_id, "autonomy_debt_exceeded", "Quality too low for current autonomy level")
+            state = await self.get_or_create_state(agent_id)
 
+        await self._db.execute(
+            "UPDATE autonomy_budgets SET used_today=? WHERE agent_id=?",
+            (new_used, agent_id),
+        )
         await self._save_state(state)
+
+        return {
+            "action_recorded": True,
+            "action_cost": action_cost,
+            "budget_used_today": new_used,
+            "budget_daily_limit": budget["daily_budget"],
+            "budget_exceeded": budget_exceeded,
+        }
 
     async def promote_agent(self, agent_id: str, new_level: AutonomyLevel, reason: str, quality_threshold: float) -> None:
         await self._init_schema()
@@ -114,15 +170,10 @@ class ApprenticeshipDatabase:
         )
 
         state.level = new_level
-        state.supervision_ratio = 1.0 - (
-            sum(1 for _ in new_level.value.replace("fully_", ""))
-        ) * 0.1
+        state.supervision_ratio = self._calculate_supervision_ratio(new_level)
         state.autonomy_budget_remaining = self._calculate_budget(new_level)
 
-        await self._db.execute(
-            "INSERT INTO autonomy_transitions (agent_id, from_level, to_level, reason, quality_threshold, transition_date) VALUES (?, ?, ?, ?, ?, ?)",
-            (agent_id, from_level.value, new_level.value, reason, quality_threshold, datetime.now().isoformat()),
-        )
+        await self._save_transition(agent_id, from_level, new_level, reason, quality_threshold)
         await self._save_state(state)
 
     async def _demote_agent(self, agent_id: str, reason: str, quality_threshold: float) -> None:
@@ -130,9 +181,30 @@ class ApprenticeshipDatabase:
         from_level = state.level
         levels = list(AutonomyLevel)
         current_idx = levels.index(from_level)
-        if current_idx < len(levels) - 1:
-            new_level = levels[current_idx + 1]
-            await self.promote_agent(agent_id, new_level, reason, quality_threshold)
+        if current_idx > 0:
+            new_level = levels[current_idx - 1]
+            await self._save_transition(agent_id, from_level, new_level, reason, quality_threshold)
+            state.level = new_level
+            state.supervision_ratio = min(1.0, state.supervision_ratio + 0.2)
+            state.autonomy_debt = 0.0
+            state.autonomy_budget_remaining = self._calculate_budget(new_level)
+            await self._save_state(state)
+
+    async def _save_transition(self, agent_id: str, from_level: AutonomyLevel, to_level: AutonomyLevel, reason: str, quality_threshold: float) -> None:
+        await self._db.execute(
+            "INSERT INTO autonomy_transitions (agent_id, from_level, to_level, reason, quality_threshold, transition_date) VALUES (?, ?, ?, ?, ?, ?)",
+            (agent_id, from_level.value, to_level.value, reason, quality_threshold, datetime.now().isoformat()),
+        )
+
+    def _calculate_supervision_ratio(self, level: AutonomyLevel) -> float:
+        ratios = {
+            AutonomyLevel.FULLY_SUPERVISED: 1.0,
+            AutonomyLevel.APPROVE_DANGEROUS: 0.75,
+            AutonomyLevel.APPROVE_NOVEL: 0.5,
+            AutonomyLevel.APPROVE_UNCERTAIN: 0.25,
+            AutonomyLevel.FULLY_AUTONOMOUS: 0.05,
+        }
+        return ratios.get(level, 1.0)
 
     def _calculate_budget(self, level: AutonomyLevel) -> int:
         budgets = {
