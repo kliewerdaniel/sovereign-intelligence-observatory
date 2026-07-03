@@ -292,7 +292,7 @@ source .venv/bin/activate
 # Install dependencies
 pip install fastapi uvicorn aiosqlite pydantic httpx pytest pytest-asyncio
 
-# Run all tests (121 tests across 7 component suites)
+# Run all tests (176 tests across 8 suites)
 ./run_tests.sh
 ```
 
@@ -382,7 +382,7 @@ cd sovereign-apprenticeship && pytest tests/
 cd intelligence-observatory && pytest tests/
 pytest tests/test_shared_infrastructure.py
 
-# Expected: 135 tests, all passing, 0 warnings
+# Expected: 176 tests, all passing, 0 warnings
 ```
 
 **Test architecture:**
@@ -666,6 +666,114 @@ Client reconstruction: accumulate deltas against a local state object. Every 30 
 | Variable | Default | Description |
 |---|---|---|
 | `ARCHIVE_AFTER_DAYS` | `90` | Age in days after which recipes are eligible for cold storage |
+
+---
+
+## Ledger Security & Cluster Topology
+
+### Sequential Ledger Chain
+
+Archive hashes form a verifiable chain. Each archive's `cold_storage_archive` metadata row stores the SHA-256 hash of the preceding archive in a `previous_hash` column. Genesis archives have `previous_hash=""`.
+
+```
+Genesis ←───────── Archive 1 ←───────── Archive 2 ←───────── Archive 3
+previous_hash=""   previous_hash=       previous_hash=       previous_hash=
+                   sha256(Genesis)      sha256(Archive 1)   sha256(Archive 2)
+```
+
+**Verification:** `verify_chain()` walks from the most recent archive to genesis, comparing each archive's `previous_hash` against the SHA-256 of the archive that follows it. Returns per-archive validation results:
+
+```python
+result = await archive_pipeline.verify_chain()
+# [
+#   {"filename": "archive-2025-03-01.csv.gz", "valid": True,  "error": None,           "hash": "sha256:abc..."},
+#   {"filename": "archive-2025-06-01.csv.gz", "valid": False, "error": "Chain break",  "hash": "sha256:def..."},
+# ]
+```
+
+A tampered archive is flagged in two ways: (1) its individual `verify_archive()` call fails (hash mismatch), and (2) its successor's `previous_hash` link breaks.
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARCHIVE_AFTER_DAYS` | `90` | Age threshold for archive eligibility |
+
+### On-Demand Archive Streamer
+
+`ArchiveStreamer` reads gzipped CSV archives line-by-line without loading the full file into memory:
+
+```python
+from intelligence_observatory.src.archive import ArchiveStreamer
+
+streamer = ArchiveStreamer(archive_dir="/path/to/archives")
+
+# Find a single recipe by ID (streams until match, then stops)
+recipe = streamer.find_recipe("archive-2025-06-01.csv.gz", "recipe-abc123")
+
+# Iterate all records as a generator
+async for row in streamer.iter_archive("archive-2025-06-01.csv.gz"):
+    print(row["objective"], row["score"])
+```
+
+- Uses `gzip.open(..., newline="")` + `csv.DictReader` for safe row-by-row decompression.
+- `find_recipe()` short-circuits on first match by `id` column. Returns `None` when no match is found.
+- `iter_archive()` yields all rows. Raises `FileNotFoundError` for missing archives.
+
+### LAN Peer Discovery
+
+`shared/peer_discovery.py` provides UDP multicast peer discovery for multi-node deployments:
+
+```python
+from shared.peer_discovery import PeerDiscovery
+
+discovery = PeerDiscovery(
+    agent_id="observatory-node-1",
+    service_port=8000,
+    callbacks={
+        "on_peer_joined": lambda peer: print(f"Peer joined: {peer}"),
+        "on_peer_lost": lambda peer: print(f"Peer lost: {peer}"),
+    },
+)
+await discovery.start()
+await asyncio.sleep(10)
+print(discovery.peers)  # active peers
+await discovery.stop()
+```
+
+- **Transport:** UDP multicast on `239.255.42.69:42069` (configurable).
+- **Heartbeat:** JSON announcement (`agent_id`, `port`, `service`, `ts`) broadcast every 30 seconds.
+- **Staleness:** Peers not heard from in 90 seconds are removed. `on_peer_lost` fires on expiry.
+- **Loopback:** `IP_MULTICAST_LOOP` is enabled for single-machine testing — no physical network required.
+
+| Variable | Default | Description |
+|---|---|---|
+| `DISCOVERY_PORT` | `42069` | UDP multicast port |
+| `DISCOVERY_INTERVAL` | `30` | Heartbeat interval (seconds) |
+| `DISCOVERY_TIMEOUT` | `90` | Stale peer expiry (seconds) |
+| `DISCOVERY_TTL` | `2` | Multicast TTL (1 = same subnet) |
+
+### Saturated Outbox Circuit Breaker
+
+The Sovereign Apprenticeship Engine freezes action recording when the `OutboxStore` queue exceeds its capacity threshold:
+
+```python
+# In apprenticeship config
+OUTBOX_CIRCUIT_BREAKER_LIMIT = 50  # default
+
+# When outbox.count_pending() >= 50, record_action() returns:
+#   {"circuit_breaked": True, "outbox_pending": 50, "circuit_breaker_limit": 50, ...}
+# The action is silently rejected — no exception is raised.
+```
+
+The `wire_outbox()` function attaches the `OutboxStore` to the `ApprenticeshipDatabase` at startup:
+
+```python
+from sovereign_apprenticeship.src.api import wire_outbox
+
+outbox = OutboxStore("federated_outbox.db")
+wire_outbox(outbox)
+```
+
+A `GET /api/circuit-breaker/{agent_id}` endpoint exposes the current outbox state and circuit breaker status.
 
 ---
 

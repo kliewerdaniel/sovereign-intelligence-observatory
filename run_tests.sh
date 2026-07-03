@@ -13,7 +13,8 @@ echo ""
 
 # Build per-component test commands
 declare -A COMPONENTS
-COMPONENTS["shared infrastructure"]="$PYTEST $ROOT/tests/ -v"
+COMPONENTS["shared infrastructure"]="$PYTEST $ROOT/tests/ --ignore=$ROOT/tests/test_ledger_security.py --ignore=$ROOT/tests/test_circuit_breaker.py -v"
+COMPONENTS["ledger + circuit breaker"]="$PYTEST $ROOT/tests/test_ledger_security.py $ROOT/tests/test_circuit_breaker.py -v"
 COMPONENTS["agent-recipe-compiler"]="$PYTEST $ROOT/agent-recipe-compiler/tests/ -v"
 COMPONENTS["expert-signal-router"]="cd $ROOT/expert-signal-router && $PYTEST tests/ -v"
 COMPONENTS["autonomous-evaluation-loop"]="cd $ROOT/autonomous-evaluation-loop && $PYTEST tests/ -v"
@@ -21,7 +22,7 @@ COMPONENTS["sovereign-apprenticeship"]="cd $ROOT/sovereign-apprenticeship && $PY
 COMPONENTS["intelligence-observatory"]="cd $ROOT/intelligence-observatory && $PYTEST tests/ -v"
 COMPONENTS["tacit-judgment-extractor"]="cd $ROOT/tacit-judgment-extractor && $PYTEST tests/ -v"
 
-for name in "shared infrastructure" "agent-recipe-compiler" "expert-signal-router" "autonomous-evaluation-loop" "sovereign-apprenticeship" "intelligence-observatory" "tacit-judgment-extractor"; do
+for name in "shared infrastructure" "ledger + circuit breaker" "agent-recipe-compiler" "expert-signal-router" "autonomous-evaluation-loop" "sovereign-apprenticeship" "intelligence-observatory" "tacit-judgment-extractor"; do
     cmd="${COMPONENTS[$name]}"
     echo "--- $name ---"
     echo "$ $cmd"

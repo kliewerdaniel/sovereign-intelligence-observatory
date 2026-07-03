@@ -1,15 +1,19 @@
 """Sovereign Apprenticeship Engine - Asynchronous Database Layer"""
 
-from typing import List, Dict, Any, Optional
+import os
+from typing import List, Dict, AsyncIterator, Optional
 from datetime import datetime
 
 from shared.async_db import AsyncDatabase
 from .models import AutonomyState, AutonomyLevel, AutonomyTransition
 
+OUTBOX_CIRCUIT_BREAKER_LIMIT = int(os.getenv("OUTBOX_CIRCUIT_BREAKER_LIMIT", "50"))
+
 
 class ApprenticeshipDatabase:
-    def __init__(self, db_path: str = ":memory:"):
+    def __init__(self, db_path: str = ":memory:", outbox=None):
         self._db = AsyncDatabase(db_path)
+        self._outbox = outbox  # Optional OutboxStore for circuit breaker
         self._initialized = False
 
     async def _init_schema(self) -> None:
@@ -123,8 +127,33 @@ class ApprenticeshipDatabase:
         )
         await self._db.commit()
 
-    async def record_action(self, agent_id: str, monitored: bool, quality_score: float) -> Dict[str, Any]:
+    async def record_action(
+        self, agent_id: str, monitored: bool, quality_score: float,
+    ) -> Dict[str, Any]:
         await self._init_schema()
+
+        # Check outbox circuit breaker.
+        circuit_breaked = False
+        outbox_pending = 0
+        if self._outbox is not None:
+            outbox_pending = self._outbox.count_pending()
+            if outbox_pending >= OUTBOX_CIRCUIT_BREAKER_LIMIT:
+                circuit_breaked = True
+                state = await self.get_or_create_state(agent_id)
+                return {
+                    "action_recorded": False,
+                    "circuit_breaked": True,
+                    "outbox_pending": outbox_pending,
+                    "circuit_breaker_limit": OUTBOX_CIRCUIT_BREAKER_LIMIT,
+                    "current_level": state.level.value,
+                    "autonomy_budget_remaining": state.autonomy_budget_remaining,
+                    "autonomy_debt": state.autonomy_debt,
+                    "action_cost": 0.0,
+                    "budget_used_today": 0,
+                    "budget_daily_limit": 100,
+                    "budget_exceeded": False,
+                }
+
         state = await self.get_or_create_state(agent_id)
         state.total_actions += 1
         if monitored:
@@ -150,6 +179,7 @@ class ApprenticeshipDatabase:
 
         return {
             "action_recorded": True,
+            "circuit_breaked": False,
             "action_cost": action_cost,
             "budget_used_today": new_used,
             "budget_daily_limit": budget["daily_budget"],

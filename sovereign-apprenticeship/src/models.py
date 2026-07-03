@@ -39,6 +39,9 @@ class AgentStateResponse(BaseModel):
 
 class ActionResponse(BaseModel):
     action_recorded: bool = True
+    circuit_breaked: bool = False
+    outbox_pending: int = 0
+    circuit_breaker_limit: int = 50
     current_level: str
     autonomy_budget_remaining: int
     autonomy_debt: float

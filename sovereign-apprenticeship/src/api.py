@@ -1,19 +1,27 @@
 """Sovereign Apprenticeship Engine - HTTP API"""
 
-from typing import List, Dict, Any
-from fastapi import FastAPI, HTTPException, Depends
+from typing import List, Dict, Any, Optional
+from fastapi import FastAPI, HTTPException, Depends, Query
 
 from .models import (
     ActionRecord, PromoteRequest, AgentStateResponse,
     ActionResponse, PromoteResponse, BudgetResponse, AutonomyLevel,
 )
-from .database import ApprenticeshipDatabase
+from .database import ApprenticeshipDatabase, OUTBOX_CIRCUIT_BREAKER_LIMIT
 
-app = FastAPI(title="Sovereign Apprenticeship Engine", version="2.0.0")
+app = FastAPI(title="Sovereign Apprenticeship Engine", version="2.1.0")
+
+# Optional outbox reference wired in at startup by the hosting layer.
+_outbox = None
+
+
+def wire_outbox(outbox_instance) -> None:
+    global _outbox
+    _outbox = outbox_instance
 
 
 async def get_db() -> ApprenticeshipDatabase:
-    db = ApprenticeshipDatabase()
+    db = ApprenticeshipDatabase(outbox=_outbox)
     yield db
     await db.close()
 
@@ -45,14 +53,38 @@ async def record_action(
     result = await db.record_action(agent_id, body.monitored, body.quality_score)
     state = await db.get_or_create_state(agent_id)
     return ActionResponse(
+        action_recorded=result.get("action_recorded", True),
+        circuit_breaked=result.get("circuit_breaked", False),
+        outbox_pending=result.get("outbox_pending", 0),
+        circuit_breaker_limit=OUTBOX_CIRCUIT_BREAKER_LIMIT,
         current_level=state.level.value,
         autonomy_budget_remaining=state.autonomy_budget_remaining,
         autonomy_debt=state.autonomy_debt,
-        action_cost=result["action_cost"],
-        budget_used_today=result["budget_used_today"],
-        budget_daily_limit=result["budget_daily_limit"],
-        budget_exceeded=result["budget_exceeded"],
+        action_cost=result.get("action_cost", 0.0),
+        budget_used_today=result.get("budget_used_today", 0),
+        budget_daily_limit=result.get("budget_daily_limit", 100),
+        budget_exceeded=result.get("budget_exceeded", False),
     )
+
+
+@app.get("/api/circuit-breaker/{agent_id}")
+async def get_circuit_breaker_status(
+    agent_id: str,
+    db: ApprenticeshipDatabase = Depends(get_db),
+) -> Dict[str, Any]:
+    state = await db.get_or_create_state(agent_id)
+    outbox_pending = 0
+    circuit_breaked = False
+    if _outbox is not None:
+        outbox_pending = _outbox.count_pending()
+        circuit_breaked = outbox_pending >= OUTBOX_CIRCUIT_BREAKER_LIMIT
+    return {
+        "agent_id": agent_id,
+        "circuit_breaked": circuit_breaked,
+        "outbox_pending": outbox_pending,
+        "circuit_breaker_limit": OUTBOX_CIRCUIT_BREAKER_LIMIT,
+        "current_level": state.level.value,
+    }
 
 
 @app.post("/api/promote/{agent_id}", response_model=PromoteResponse)
