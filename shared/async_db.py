@@ -9,16 +9,20 @@ from typing import Optional, List, Dict, Any, Tuple
 class AsyncDatabase:
     """Async SQLite database with FTS5 and JSON helper methods."""
 
-    def __init__(self, db_path: str = ":memory:"):
+    def __init__(self, db_path: str = ":memory:", busy_timeout: int = 5000):
         self.db_path = db_path
+        self.busy_timeout = busy_timeout
         self._conn: Optional[aiosqlite.Connection] = None
 
     async def connect(self) -> aiosqlite.Connection:
         if self._conn is None:
-            self._conn = await aiosqlite.connect(self.db_path)
+            self._conn = await aiosqlite.connect(self.db_path, timeout=self.busy_timeout / 1000)
             self._conn.row_factory = aiosqlite.Row
             await self._conn.execute("PRAGMA journal_mode=WAL")
+            await self._conn.execute("PRAGMA synchronous=NORMAL")
+            await self._conn.execute(f"PRAGMA busy_timeout={self.busy_timeout}")
             await self._conn.execute("PRAGMA foreign_keys=ON")
+            await self._conn.execute("PRAGMA cache_size=-8000")
         return self._conn
 
     async def close(self) -> None:

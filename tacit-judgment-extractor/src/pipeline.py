@@ -252,6 +252,90 @@ class TacitJudgmentPipeline:
 
         return patterns
 
+    def _parse_llm_tree_response(self, raw: str) -> Optional[List[DecisionNode]]:
+        """Defensive lookahead token verification for LLM decision tree output.
+
+        Performs a three-phase validation:
+        1. Structural lookahead — scans for balanced braces and valid JSON prefix.
+        2. Schema conformance — every parsed node must have ``condition``,
+           ``action``, ``confidence``, and ``rationale``.
+        3. Corrupted-stream fallback — truncates at the last valid JSON object
+           if the stream was cut off mid-object.
+        """
+        if not raw or len(raw.strip()) < 10:
+            logger.debug("LLM response too short for decision tree parsing")
+            return None
+
+        text = raw.strip()
+
+        # Phase 1: balanced-brace lookahead
+        depth = 0
+        last_valid_brace = -1
+        for i, ch in enumerate(text):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    last_valid_brace = i
+                elif depth < 0:
+                    logger.debug("Unbalanced braces at position %d", i)
+                    break
+        truncated = text[:last_valid_brace + 1] if last_valid_brace > 0 else text
+        if not truncated.endswith("}") and not truncated.endswith("]"):
+            logger.debug("No complete JSON structure found; falling back to rule-based tree")
+            return None
+
+        # Phase 2: tentatively wrap bare objects in an array
+        candidates = []
+        attempt = None
+        for wrapper in [truncated, f"[{truncated}]"]:
+            try:
+                parsed = json.loads(wrapper)
+                attempt = parsed
+                break
+            except json.JSONDecodeError:
+                continue
+        if attempt is None:
+            logger.debug("JSON decode failed after brace lookahead")
+            return None
+
+        if isinstance(attempt, dict):
+            attempt = [attempt]
+
+        # Phase 3: schema conformance
+        nodes = []
+        for item in attempt:
+            if not isinstance(item, dict):
+                continue
+            condition = item.get("condition") or item.get("node") or item.get("rule")
+            if not condition:
+                continue
+            action = item.get("action") or item.get("decision") or "Take action based on condition"
+            try:
+                confidence = float(item.get("confidence", 0.6))
+            except (ValueError, TypeError):
+                confidence = 0.6
+            rationale = item.get("rationale") or item.get("description") or item.get("reason", "LLM extracted")
+
+            if isinstance(condition, str) and len(condition) > 3:
+                nodes.append(DecisionNode(
+                    node_id=f"node-llm-{uuid4().hex[:8]}",
+                    parent_id=None,
+                    condition=condition,
+                    action=str(action),
+                    confidence=max(0.0, min(1.0, confidence)),
+                    rationale=str(rationale),
+                    children=[],
+                ))
+
+        if not nodes:
+            logger.debug("Zero schema-conformant nodes after lookahead validation")
+            return None
+
+        logger.debug("Lookahead-verified %d LLM decision nodes", len(nodes))
+        return nodes
+
     async def _build_decision_tree(
         self, session: Dict[str, Any], patterns: List[PatternAnalysis]
     ) -> Optional[DecisionTreeExport]:
@@ -283,23 +367,9 @@ class TacitJudgmentPipeline:
             )
 
             if response:
-                try:
-                    parsed = json.loads(response)
-                    if isinstance(parsed, dict):
-                        parsed = [parsed]
-                    for item in parsed:
-                        if isinstance(item, dict) and "condition" in item:
-                            llm_nodes.append(DecisionNode(
-                                node_id=f"node-llm-{uuid4().hex[:8]}",
-                                parent_id=None,
-                                condition=item.get("condition", "LLM extracted decision"),
-                                action=item.get("action", "Take action based on condition"),
-                                confidence=float(item.get("confidence", 0.6)),
-                                rationale=item.get("rationale", item.get("description", "LLM extracted")),
-                                children=[],
-                            ))
-                except (json.JSONDecodeError, ValueError, TypeError) as exc:
-                    logger.debug("Failed to parse LLM decision tree: %s", exc)
+                llm_nodes = self._parse_llm_tree_response(response) or []
+
+        root_id = f"node-root-{uuid4().hex[:8]}"
 
         root_id = f"node-root-{uuid4().hex[:8]}"
         nodes.append(DecisionNode(

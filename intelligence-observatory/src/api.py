@@ -1,8 +1,8 @@
-"""Intelligence Observatory - HTTP API"""
+"""Intelligence Observatory - HTTP API & WebSocket Telemetry"""
 
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import FastAPI, HTTPException, Query, Depends, WebSocket, WebSocketDisconnect
 
 from .models import (
     TimelineUpdate, ObsolescentPromptUpdate, UnusedMemoryUpdate,
@@ -10,8 +10,9 @@ from .models import (
 )
 from .database import ObservatoryDatabase
 from .dashboard import router as dashboard_router
+from .telemetry import telemetry_manager, TelemetryManager
 
-app = FastAPI(title="Sovereign Intelligence Observatory", version="2.1.0")
+app = FastAPI(title="Sovereign Intelligence Observatory", version="2.2.0")
 app.include_router(dashboard_router)
 
 
@@ -161,6 +162,23 @@ async def generate_report(
         return {"report": md, "format": "markdown"}
 
     return report
+
+
+@app.websocket("/api/observatory/stream")
+async def telemetry_websocket(websocket: WebSocket) -> None:
+    await telemetry_manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await telemetry_manager.disconnect(websocket)
+
+
+@app.on_event("shutdown")
+async def shutdown_telemetry() -> None:
+    await telemetry_manager.shutdown()
 
 
 @app.get("/api/health")

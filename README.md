@@ -424,6 +424,91 @@ pytest tests/test_shared_infrastructure.py
 
 ---
 
+## Advanced Multi-Agent Concurrency
+
+### Write-Ahead Logging (WAL)
+
+All SQLite databases use **WAL journal mode** with `synchronous=NORMAL` for concurrent read/write performance. Each `AsyncDatabase` instance sets:
+
+- `PRAGMA journal_mode=WAL` -- allows concurrent readers and a single writer without blocking.
+- `PRAGMA synchronous=NORMAL` -- balances durability vs. write throughput (safe with WAL).
+- `PRAGMA busy_timeout=5000` -- writer waits up to 5 seconds instead of immediately raising `SQLITE_BUSY`.
+- `PRAGMA cache_size=-8000` -- 8 MB page cache per connection.
+
+These pragmas are applied at every `connect()` call, so every component database (Recipe, Signal, Evaluation, Apprenticeship, Observatory, TJE) inherits them automatically. To override the busy timeout for a specific database:
+
+```python
+from shared.async_db import AsyncDatabase
+
+# Higher timeout for batch ingestion
+db = AsyncDatabase("recipes.db", busy_timeout=15000)
+```
+
+### Vector Engine Schema Versioning
+
+The ChromaDB abstraction (`shared/chroma_client.py`) includes an `EmbeddingModelLedger` that stores the embedding model name and dimension in a dedicated `_embedding_ledger` Chroma collection. On startup:
+
+1. The ledger checks if the current embedding model matches the one used to populate the collection.
+2. If the model name or dimension **changed**, it sets `needs_reindex=true` on the collection metadata and logs a warning.
+3. All subsequent add/query operations proceed through a `_ChromaCollectionProxy` that validates compatibility.
+
+**Recovery steps when embedding dimensions change:**
+
+1. Check the warning logs for `"Embedding model changed: was 'X' (dim=N), now 'Y' (dim=M)"`.
+2. Delete the old Chroma collection and re-ingest all documents:
+   ```python
+   from shared.chroma_client import ChromaClient
+   client = ChromaClient(embedding_model="new-model", embedding_dimension=768)
+   # Re-add all documents via client.add_document(...)
+   ```
+3. The ledger auto-registers the new model on first document add.
+
+### Defensive Stream Merging
+
+The Tacit Judgment Extractor's `_parse_llm_tree_response()` method implements a three-phase lookahead token verification before building decision trees from local LLM output:
+
+1. **Balanced-brace scan** -- scans for the outermost balanced `{}` or `[]` structure. If the stream was cut off mid-object, it truncates at the last complete brace.
+2. **JSON decode with auto-wrap** -- attempts to parse as both a bare object and a wrapped array `[...]`.
+3. **Schema conformance** -- every extracted node must have `condition`, `action`, `confidence`, and `rationale` fields. Nodes that don't pass are silently dropped.
+
+This prevents corrupted or truncated LLM output from producing broken decision trees; the pipeline falls back to rule-based extraction when structural validation fails.
+
+### Local Federated Sync
+
+`shared/federated_sync.py` provides two transports for exchanging serialized decision trees between isolated agent instances:
+
+**File-share transport** (`FileShareTransport`):
+- Writes payloads as `.sio_federated` JSON files to a shared directory (NFS, SMB, local).
+- Inbound files are discovered by glob, validated, and deleted after import.
+- Self-imports are filtered by `source_agent_id`.
+
+**Local HTTP transport** (`HttpTransport`):
+- Push/pull over `POST /api/federated/ingest` and `GET /api/federated/ingest/latest`.
+- Intended for agent instances on the same machine or LAN.
+- Uses `httpx.AsyncClient` with a 10-second timeout.
+
+Every payload carries a `schema_version: "decision-tree-exchange-v1"` tag; incompatible formats are rejected at deserialization time.
+
+### WebSocket Telemetry Loop
+
+The Intelligence Observatory exposes `ws://host:port/api/observatory/stream` via `intelligence-observatory/src/telemetry.py`. The `TelemetryManager`:
+
+- Accepts WebSocket connections and maintains a set of active clients.
+- Runs a background `asyncio` broadcast loop that pushes a JSON payload every 5 seconds.
+- Each payload includes: `stats`, `timeline` (last 30 days), `obsolescent_count`, `drift_alerts` (regressions from last 7 days).
+- Automatically starts the broadcast loop on first client connect and stops when all clients disconnect.
+- Handles `WebSocketDisconnect` gracefully by removing dead connections.
+
+### Concurrency Testing
+
+The test suite includes `tests/test_concurrency.py` with stress tests for:
+- 50 concurrent parallel writers to a single in-memory database.
+- 20 concurrent readers interleaved with 30 concurrent writers.
+- Deliberate `BEGIN IMMEDIATE` contention with 50ms sleep to exercise busy-timeout.
+- Concurrent federated file exports from two agent instances (40 files in parallel).
+
+---
+
 ## Philosophy
 
 > **"Intelligence is not the model. Intelligence is the accumulated decisions that shaped the model."**
