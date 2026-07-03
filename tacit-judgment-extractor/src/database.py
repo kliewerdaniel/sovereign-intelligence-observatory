@@ -184,6 +184,16 @@ class TacitJudgmentDatabase:
         await self._db.commit()
         return export.tree_id
 
+    async def get_tree_export(self, tree_id: str) -> Optional[Dict[str, Any]]:
+        await self._init_schema()
+        row = await self._db.fetchone(
+            "SELECT * FROM decision_tree_exports WHERE tree_id = ?", (tree_id,)
+        )
+        if row is None:
+            return None
+        row["export_data"] = self._db.deserialize_json(row.get("export_data"), default=[])
+        return row
+
     async def update_session_status(self, session_id: str, status: str) -> None:
         await self._init_schema()
         await self._db.execute(

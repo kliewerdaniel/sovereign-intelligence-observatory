@@ -78,9 +78,31 @@ class PatternAnalysis(BaseModel):
     suggested_decision_node: Optional[Dict[str, Any]] = None
 
 
+class ReasoningPattern(BaseModel):
+    pattern_id: str
+    session_id: str
+    pattern_type: str
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    description: str
+    extracted_rules: List[str] = Field(default_factory=list)
+    antecedents: List[str] = Field(default_factory=list)
+    consequents: List[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
+class TreeExportResponse(BaseModel):
+    tree_id: str
+    session_id: str
+    domain: str
+    expert_id: str
+    nodes: List[DecisionNode]
+    schema_version: str = "1.0.0"
+
+
 class AnalyticResult(BaseModel):
     session_id: str
     patterns: List[PatternAnalysis] = Field(default_factory=list)
     decision_tree: Optional[DecisionTreeExport] = None
+    reasoning_patterns: List[ReasoningPattern] = Field(default_factory=list)
     analysis_duration_ms: int = 0
     status: str = SessionState.COMPLETE.value

@@ -13,7 +13,7 @@ echo ""
 
 # Build per-component test commands
 declare -A COMPONENTS
-COMPONENTS["shared infrastructure"]="$PYTEST $ROOT/tests/test_shared_infrastructure.py -v"
+COMPONENTS["shared infrastructure"]="$PYTEST $ROOT/tests/ -v"
 COMPONENTS["agent-recipe-compiler"]="$PYTEST $ROOT/agent-recipe-compiler/tests/ -v"
 COMPONENTS["expert-signal-router"]="cd $ROOT/expert-signal-router && $PYTEST tests/ -v"
 COMPONENTS["autonomous-evaluation-loop"]="cd $ROOT/autonomous-evaluation-loop && $PYTEST tests/ -v"

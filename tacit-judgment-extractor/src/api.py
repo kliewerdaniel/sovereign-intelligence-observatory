@@ -6,9 +6,12 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Query, Depends
 
+import json
+
 from .models import (
     ExpertSessionCreate, SessionCreateResponse, SessionResponse,
-    SessionCorrection, DecisionNode, DecisionTreeExport, AnalyticResult,
+    SessionCorrection, DecisionNode, DecisionTreeExport, TreeExportResponse,
+    AnalyticResult, ReasoningPattern,
 )
 from .database import TacitJudgmentDatabase
 from .pipeline import TacitJudgmentPipeline
@@ -17,7 +20,7 @@ from shared.config import Settings
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Tacit Judgment Extractor", version="1.0.0")
+app = FastAPI(title="Tacit Judgment Extractor", version="1.1.0")
 settings = Settings.from_env()
 
 
@@ -145,6 +148,47 @@ async def list_sessions(
     return await db.list_sessions(
         expert_id=expert_id, domain=domain, status=status,
         limit=limit, offset=offset,
+    )
+
+
+@app.post("/api/expert/session", status_code=201, response_model=SessionCreateResponse)
+async def create_expert_session(
+    body: ExpertSessionCreate,
+    db: TacitJudgmentDatabase = Depends(get_db),
+) -> SessionCreateResponse:
+    existing = await db.get_session(body.session_id)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=f"Session already exists: {body.session_id}")
+    await db.create_session(
+        session_id=body.session_id,
+        expert_id=body.expert_id,
+        domain=body.domain,
+        session_text=body.session_text,
+    )
+    return SessionCreateResponse(session_id=body.session_id)
+
+
+@app.get("/api/expert/trees/{tree_id}/export", response_model=TreeExportResponse)
+async def export_decision_tree_by_id(
+    tree_id: str,
+    db: TacitJudgmentDatabase = Depends(get_db),
+) -> TreeExportResponse:
+    export_row = await db.get_tree_export(tree_id)
+    if export_row is None:
+        raise HTTPException(status_code=404, detail=f"Tree export not found: {tree_id}")
+
+    export_data = export_row.get("export_data", {})
+    if isinstance(export_data, str):
+        export_data = json.loads(export_data)
+    nodes = [DecisionNode(**n) for n in export_data]
+
+    return TreeExportResponse(
+        tree_id=export_row["tree_id"],
+        session_id=export_row["session_id"],
+        domain=export_row["domain"],
+        expert_id=export_row["expert_id"],
+        nodes=nodes,
+        schema_version=export_row.get("schema_version", "1.0.0"),
     )
 
 

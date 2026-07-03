@@ -9,8 +9,10 @@ from .models import (
     SignalCorrelationUpdate, CapabilityChangeRecord, ObservatoryStats,
 )
 from .database import ObservatoryDatabase
+from .dashboard import router as dashboard_router
 
-app = FastAPI(title="Sovereign Intelligence Observatory", version="2.0.0")
+app = FastAPI(title="Sovereign Intelligence Observatory", version="2.1.0")
+app.include_router(dashboard_router)
 
 
 async def get_db() -> ObservatoryDatabase:

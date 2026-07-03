@@ -37,6 +37,12 @@ async def get_chroma() -> Optional[ChromaClient]:
     if not settings.enable_chroma:
         yield None
         return
+    try:
+        import chromadb  # noqa: F401
+    except ImportError:
+        logger.warning("chromadb package not installed; ChromaDB integration disabled")
+        yield None
+        return
     client = ChromaClient(
         host=settings.chroma_host,
         port=settings.chroma_port,
@@ -164,6 +170,38 @@ async def search_recipes(
         total=len(recipes),
         query=q,
         semantic=semantic and chroma is not None,
+    )
+
+
+@app.get("/api/recipes/semantic-search", response_model=SearchResult)
+async def semantic_search_recipes(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=100),
+    db: RecipeDatabase = Depends(get_db),
+    chroma: Optional[ChromaClient] = Depends(get_chroma),
+) -> SearchResult:
+    if chroma is None:
+        return SearchResult(results=[], total=0, query=q, semantic=False)
+    try:
+        chroma_results = await chroma.search(q, n_results=limit)
+    except Exception:
+        chroma_results = None
+    if not chroma_results:
+        return SearchResult(results=[], total=0, query=q, semantic=True)
+
+    recipes = []
+    for sr in chroma_results:
+        recipe = await db.get_recipe(sr["id"])
+        if recipe:
+            recipes.append(recipe)
+            if len(recipes) >= limit:
+                break
+
+    return SearchResult(
+        results=[RecipeResponse(**r) for r in recipes],
+        total=len(recipes),
+        query=q,
+        semantic=True,
     )
 
 

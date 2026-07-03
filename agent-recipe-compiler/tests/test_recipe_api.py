@@ -141,6 +141,49 @@ class TestRecipeAPI:
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/json"
 
+    async def test_semantic_search_no_chroma(self, client):
+        from src.api import app, get_chroma
+
+        async def override_none():
+            yield None
+
+        app.dependency_overrides[get_chroma] = override_none
+        try:
+            resp = await client.get("/api/recipes/semantic-search", params={"q": "test"})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["query"] == "test"
+            assert data["semantic"] is False
+        finally:
+            app.dependency_overrides.pop(get_chroma, None)
+
+    async def test_semantic_search_with_mock_chroma(self, client):
+        payload = {
+            "objective": "semantic_test_doc",
+            "model": "qwen3.5",
+            "prompt_version": 1,
+            "memory_version": 1,
+        }
+        create = await client.post("/api/recipes", json=payload)
+        recipe_id = create.json()["recipe_id"]
+
+        from src.api import app, get_chroma
+        from unittest.mock import AsyncMock
+        mock = AsyncMock()
+        mock.search = AsyncMock(return_value=[{"id": recipe_id, "document": "test", "metadata": {}, "distance": 0.5}])
+
+        async def override_chroma():
+            yield mock
+
+        app.dependency_overrides[get_chroma] = override_chroma
+        try:
+            resp = await client.get("/api/recipes/semantic-search", params={"q": "semantic_test"})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["semantic"] is True
+        finally:
+            app.dependency_overrides.pop(get_chroma, None)
+
     async def test_export_csv(self, client):
         resp = await client.get("/api/recipes/export", params={"format": "csv"})
         assert resp.status_code == 200

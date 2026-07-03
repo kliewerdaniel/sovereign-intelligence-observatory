@@ -4,6 +4,7 @@ Records expert session states and uses local LLM inferences to
 extract tacit patterns into actionable decision trees.
 """
 
+import json
 import logging
 import time
 from typing import Optional, List, Dict, Any
@@ -11,10 +12,12 @@ from uuid import uuid4
 
 from .models import (
     SessionState, DecisionNode, PatternAnalysis, DecisionTreeExport, AnalyticResult,
+    ReasoningPattern,
 )
 from .database import TacitJudgmentDatabase
 from shared.ollama_client import OllamaClient
 from shared.config import Settings
+from shared.gbnf import gbnf_schema
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,22 @@ Create decision nodes where each node has:
 Output as structured JSON decision tree."""
 
 
+REASONING_PATTERN_PROMPT = """Extract formal reasoning patterns from this expert session.
+
+Domain: {domain}
+Session text:
+{session_text}
+
+For each reasoning pattern, identify:
+- pattern_type: one of (deductive, inductive, abductive, analogical, causal, heuristic)
+- antecedents: conditions that trigger this pattern
+- consequents: conclusions or actions that follow
+- rules: IF-THEN rule statements
+- confidence: 0.0 to 1.0
+
+Output valid JSON matching the schema."""
+
+
 class TacitJudgmentPipeline:
     """Orchestrates the extraction of tacit knowledge from expert sessions."""
 
@@ -76,6 +95,7 @@ class TacitJudgmentPipeline:
             raise ValueError(f"Session not found: {session_id}")
 
         patterns = await self._extract_patterns(session)
+        reasoning_patterns = await self._extract_reasoning_patterns(session)
         decision_tree = None
         if patterns:
             decision_tree = await self._build_decision_tree(session, patterns)
@@ -86,6 +106,7 @@ class TacitJudgmentPipeline:
             session_id=session_id,
             patterns=patterns,
             decision_tree=decision_tree,
+            reasoning_patterns=reasoning_patterns,
             analysis_duration_ms=elapsed_ms,
         )
 
@@ -160,6 +181,74 @@ class TacitJudgmentPipeline:
                         extracted_rules=[line.strip()],
                     ))
                     break
+
+        return patterns
+
+    async def _extract_reasoning_patterns(
+        self, session: Dict[str, Any]
+    ) -> List[ReasoningPattern]:
+        """Extract formal reasoning patterns using GBNF-constrained LLM when available."""
+        if self.ollama is not None and self.settings.enable_ollama:
+            try:
+                gbnf = gbnf_schema(ReasoningPattern)
+            except Exception:
+                gbnf = None
+
+            if gbnf:
+                prompt = REASONING_PATTERN_PROMPT.format(
+                    domain=session.get("domain", "general"),
+                    session_text=session.get("session_text", ""),
+                )
+                raw = await self.ollama.generate(
+                    prompt=prompt,
+                    system="You are a reasoning pattern extractor. Output valid JSON.",
+                    format=gbnf,
+                    options={"temperature": 0.3},
+                )
+                if raw:
+                    try:
+                        data = json.loads(raw)
+                        if isinstance(data, dict):
+                            data = [data]
+                        return [ReasoningPattern(**rp) for rp in data]
+                    except (json.JSONDecodeError, Exception) as exc:
+                        logger.debug("GBNF extraction failed: %s", exc)
+
+        return self._fallback_reasoning_extraction(session)
+
+    def _fallback_reasoning_extraction(
+        self, session: Dict[str, Any]
+    ) -> List[ReasoningPattern]:
+        """Rule-based reasoning pattern extraction when LLM is unavailable."""
+        text = session.get("session_text", "")
+        lower = text.lower()
+        patterns = []
+        session_id = session["session_id"]
+
+        pattern_indicators = [
+            ("deductive", ["if", "then", "therefore", "must be", "implies"]),
+            ("inductive", ["usually", "typically", "often", "tends to", "most"]),
+            ("abductive", ["best explanation", "likely because", "probably due to"]),
+            ("analogical", ["similar to", "like", "analogous", "comparable"]),
+            ("causal", ["causes", "leads to", "results in", "because", "due to"]),
+            ("heuristic", ["rule of thumb", "always", "never", "check for", "look for"]),
+        ]
+
+        for ptype, indicators in pattern_indicators:
+            matched = [ind for ind in indicators if ind in lower]
+            if matched:
+                rules = [line.strip() for line in text.split("\n")
+                         if any(ind in line.lower() for ind in matched) and line.strip()]
+                patterns.append(ReasoningPattern(
+                    pattern_id=f"reason-{uuid4().hex[:8]}",
+                    session_id=session_id,
+                    pattern_type=ptype,
+                    confidence=0.5,
+                    description=f"Detected {ptype} reasoning via indicators: {', '.join(matched)}",
+                    extracted_rules=rules[:3],
+                    antecedents=[f"Trigger: {matched[0]}"],
+                    consequents=rules[:2],
+                ))
 
         return patterns
 
