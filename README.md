@@ -509,6 +509,91 @@ The test suite includes `tests/test_concurrency.py` with stress tests for:
 
 ---
 
+## Production Hardening & Isolation
+
+### Action Sandboxing
+
+The `shared/sandbox.py` module provides a lightweight execution sandbox for TJE decision node actions. Every action runs in a forked subprocess with:
+
+- **Blocklist validation** — 15+ dangerous patterns are rejected before execution (`import os`, `eval(`, `exec(`, `__import__`, `subprocess.`, `getattr(`, `.__class__`, etc.).
+- **Resource limits** (best-effort per platform):
+  - `RLIMIT_NPROC` — max child processes (default 0)
+  - `RLIMIT_NOFILE` — max open file descriptors (default 16)
+  - `RLIMIT_AS` — address space (default 64 MB)
+  - `RLIMIT_CPU` — CPU seconds (default 5)
+- **Timeout guard** — configurable per-action timeout (default 10s); kills on overrun.
+- **Stripped environment** — only `PATH=/usr/bin:/bin` and `TMPDIR` are passed to the subprocess.
+
+Usage:
+```python
+from shared.sandbox import ActionSandbox
+
+sandbox = ActionSandbox(max_cpu=5, max_memory_mb=128, timeout_s=10)
+result = await sandbox.execute(action_code, context={"recipe_id": "..."})
+if result["success"]:
+    print("Action executed safely")
+```
+
+### Vector Tenant Isolation
+
+The `ChromaClient` isolates document collections per `agent_id` using a deterministic SHA-256 namespace appended to the collection name:
+
+```
+observatory_recipes___a1b2c3d4e5f6g7h8
+```
+
+- Each `agent_id` produces a unique 16-character hex suffix, preventing cross-tenant context leakage.
+- If `agent_id` is `None`, the base collection name is used (backward compatible).
+- No two agents can query each other's embeddings without explicitly sharing the same `agent_id`.
+
+```python
+# Agent-alpha gets collection "observatory_recipes___<sha256(alpha)>"
+client_a = ChromaClient(agent_id="agent-alpha")
+
+# Agent-beta gets a different collection
+client_b = ChromaClient(agent_id="agent-beta")
+```
+
+### Background Maintenance Engine
+
+`AsyncDatabase` includes a non-blocking periodic maintenance routine:
+
+- **`PRAGMA optimize`** — safe to run concurrently with readers; a no-op if nothing needs optimisation.
+- **Conditional `VACUUM`** — only runs when the database file exceeds `vacuum_threshold_mb` (default 100 MB). Skipped for in-memory databases.
+- A **background task** (`start_periodic_maintenance(interval_s=3600)`) runs the loop and guards against overlapping runs via a sentinel flag.
+- The maintenance task is automatically cancelled when `close()` is called.
+
+```python
+db = AsyncDatabase("recipes.db")
+task = await db.start_periodic_maintenance(interval_s=3600, vacuum_threshold_mb=100)
+
+# ... normal operations ...
+
+await db.close()  # cancels maintenance task
+```
+
+### Transactional Outbox Queue
+
+The `HttpTransport` in `shared/federated_sync.py` persists undeliverable payloads to a local SQLite `federated_outbox` table and retries with exponential backoff:
+
+- **`OutboxStore`** — file-based SQLite queue using `sqlite3` directly (independent of component DB connections).
+- **Exponential backoff** — delay = `2^retry_count` seconds base, with configurable `max_retries` (default 10).
+- **Exhaustion** — when `retry_count >= max_retries`, the row is marked acknowledged (lost) and an error is logged.
+- A background `asyncio` task (`_retry_loop`) polls due rows every second and retries up to 10 per batch.
+
+```python
+from shared.federated_sync import HttpTransport
+
+transport = HttpTransport(
+    agent_id="agent-a",
+    backoff_base_s=2,    # delay = 2^retry_count
+    max_retries=10,      # give up after 10 failed retries
+)
+await transport.push(payload, "http://peer:8000")
+```
+
+---
+
 ## Philosophy
 
 > **"Intelligence is not the model. Intelligence is the accumulated decisions that shaped the model."**

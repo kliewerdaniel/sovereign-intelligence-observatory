@@ -4,6 +4,7 @@ Includes an embedding-model metadata ledger that detects dimension
 changes and flags the database for a clean re-index.
 """
 
+import hashlib
 import json
 import logging
 from typing import Optional, Dict, Any, List, Tuple
@@ -164,14 +165,23 @@ class ChromaClient:
         collection_name: str = "observatory_recipes",
         embedding_model: str = "all-MiniLM-L6-v2",
         embedding_dimension: int = 384,
+        agent_id: Optional[str] = None,
     ):
         self.host = host
         self.port = port
-        self.collection_name = collection_name
         self.embedding_model = embedding_model
         self.embedding_dimension = embedding_dimension
         self._client = None
         self._collection = None
+        self._agent_id = agent_id
+
+        # Tenant isolation: append a deterministic namespace derived from agent_id.
+        # Each agent gets its own collection, preventing cross-tenant leakage.
+        if agent_id:
+            namespace = hashlib.sha256(agent_id.encode()).hexdigest()[:16]
+            self.collection_name = f"{collection_name}___{namespace}"
+        else:
+            self.collection_name = collection_name
 
     async def _connect(self) -> bool:
         if self._client is not None:

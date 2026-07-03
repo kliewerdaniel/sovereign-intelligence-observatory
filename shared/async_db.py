@@ -1,9 +1,13 @@
 """Asynchronous SQLite base with FTS5 support and JSON handling"""
 
+import asyncio
 import json
+import logging
 import aiosqlite
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class AsyncDatabase:
@@ -13,6 +17,7 @@ class AsyncDatabase:
         self.db_path = db_path
         self.busy_timeout = busy_timeout
         self._conn: Optional[aiosqlite.Connection] = None
+        self._maintenance_task: Optional[asyncio.Task] = None
 
     async def connect(self) -> aiosqlite.Connection:
         if self._conn is None:
@@ -26,6 +31,13 @@ class AsyncDatabase:
         return self._conn
 
     async def close(self) -> None:
+        if self._maintenance_task is not None:
+            self._maintenance_task.cancel()
+            try:
+                await self._maintenance_task
+            except asyncio.CancelledError:
+                pass
+            self._maintenance_task = None
         if self._conn is not None:
             await self._conn.close()
             self._conn = None
@@ -72,6 +84,58 @@ class AsyncDatabase:
             return json.loads(value)
         except (json.JSONDecodeError, TypeError):
             return default if default is not None else {}
+
+    async def run_maintenance(self, vacuum_threshold_mb: int = 100) -> None:
+        """Non-blocking housekeeping: PRAGMA optimize + conditional VACUUM.
+
+        ``PRAGMA optimize`` is a no-op if nothing needs optimisation.
+        ``VACUUM`` is only run when the database file on disk exceeds
+        *vacuum_threshold_mb* (ignored for in-memory databases).
+        """
+        if self.db_path == ":memory:":
+            return
+        conn = await self.connect()
+
+        # PRAGMA optimize — safe to call concurrently with readers.
+        await conn.execute("PRAGMA optimize")
+
+        # Conditional VACUUM based on file size.
+        try:
+            db_path = Path(self.db_path)
+            if db_path.exists() and db_path.stat().st_size > vacuum_threshold_mb * 1024 * 1024:
+                await conn.execute("VACUUM")
+                logger.info("VACUUM completed on %s (was > %d MB)", self.db_path, vacuum_threshold_mb)
+        except OSError as exc:
+            logger.debug("Skipping VACUUM file-size check: %s", exc)
+
+    async def start_periodic_maintenance(
+        self, interval_s: int = 3600, vacuum_threshold_mb: int = 100,
+    ) -> asyncio.Task:
+        """Launch a background task that runs maintenance every *interval_s* seconds.
+
+        The task checks a sentinel flag before each run so that a prior
+        run still in progress is skipped.  Call ``cancel()`` on the
+        returned task to stop the loop.
+        """
+        self._maintenance_task = asyncio.create_task(
+            self._maintenance_loop(interval_s, vacuum_threshold_mb)
+        )
+        return self._maintenance_task
+
+    async def _maintenance_loop(self, interval_s: int, vacuum_threshold_mb: int) -> None:
+        running = False
+        while True:
+            await asyncio.sleep(interval_s)
+            if running:
+                logger.debug("Skipping maintenance — previous run still in progress")
+                continue
+            running = True
+            try:
+                await self.run_maintenance(vacuum_threshold_mb)
+            except Exception as exc:
+                logger.warning("Periodic maintenance error: %s", exc)
+            finally:
+                running = False
 
     async def ensure_fts5_trigger(
         self,
