@@ -1,0 +1,225 @@
+"""Session to Recipe Compiler Integration
+
+Captures Hermes session data into recipe artifacts for the Sovereign Intelligence Stack.
+Each substantial conversation produces a recipe with metadata, reasoning patterns,
+and outcome evaluation.
+"""
+
+import asyncio
+import json
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from uuid import uuid4
+
+from hermes_tools import session_search, terminal
+
+logger = logging.getLogger(__name__)
+
+class SessionRecipeIntegrator:
+    """Integrates Hermes session history into the Recipe Compiler.
+    
+    Captures:
+    - Session metadata (title, duration, model, tool count)
+    - User intent extraction (first user message)
+    - Assistant reasoning patterns (tool calls, iterations)
+    - Outcome evaluation (completion status, user feedback)
+    """
+    
+    def __init__(
+        self,
+        stack_db_path: Optional[str] = None,
+        output_dir: Optional[str] = None,
+        session_search_api=None,
+        terminal_api=None,
+    ):
+        self.stack_db_path = stack_db_path or "/tmp/sovereign_recipes.db"
+        self.output_dir = Path(output_dir or "/tmp/sovereign_recipes")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.session_search = session_search_api
+        self.terminal = terminal_api
+        
+    async def capture_session(
+        self,
+        session_id: str,
+        title: Optional[str] = None,
+        message_count: int = 0,
+        model: str = "unknown",
+    ) -> Dict[str, Any]:
+        """Capture a single session as a recipe artifact.
+        
+        Args:
+            session_id: Session ID from Hermes
+            title: Session title (optional, may be null)
+            message_count: Total messages in session
+            model: Model used for session
+            
+        Returns:
+            Recipe dictionary ready for storage
+        """
+        recipe_id = f"recipe-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}"
+        
+        # Extract session context
+        session_context = await self._extract_session_context(session_id)
+        
+        # Classify task type from title/content
+        task_type = self._classify_task(session_context.get("first_user_message", ""))
+        
+        # Extract reasoning patterns from tool usage
+        patterns = self._extract_reasoning_patterns(session_context.get("tool_calls", []))
+        
+        # Evaluate outcome
+        outcome = self._evaluate_outcome(session_context)
+        
+    recipe = {
+            "recipe_id": recipe_id,
+            "objective": session_context.get("first_user_message", "Unknown task"),
+            "model": model,
+            "memory_version": 0,  # Will be updated from actual memory state
+            "prompt_version": 1,
+            "retrieved_docs": session_context.get("retrieved_docs", []),
+            "reasoning_patterns": patterns,
+            "evaluation": {
+                "score": outcome.get("score", 0.5),
+                "reviewed_by": "auto",
+            },
+            "outcome": outcome.get("outcome", "unknown"),
+            "metadata": {
+                "session_id": session_id,
+                "title": title,
+                "message_count": message_count,
+                "captured_at": datetime.now().isoformat(),
+                "task_type": task_type,
+            },
+        }
+        
+        # Store recipe
+        await self._store_recipe(recipe)
+        
+        # Save JSON for reference
+        json_path = self.output_dir / f"{recipe_id}.json"
+        json_path.write_text(json.dumps(recipe, indent=2, default=str))
+        
+        logger.info("Captured recipe %s (%s)", recipe_id, task_type)
+        return recipe
+    
+    async def capture_recent_sessions(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Capture the N most recent sessions as recipes."""
+        sessions = await self._get_recent_sessions(limit)
+        recipes = []
+        
+        for session in sessions:
+            recipe = await self.capture_session(
+                session_id=session["id"],
+                title=session.get("title"),
+                message_count=session.get("message_count", 0),
+            )
+            recipes.append(recipe)
+            
+        logger.info("Captured %d recent sessions as recipes", len(recipes))
+        return recipes
+    
+    async def _extract_session_context(self, session_id: str) -> Dict[str, Any]:
+        """Extract context from a session for recipe creation."""
+        context = {
+            "first_user_message": "",
+            "tool_calls": [],
+            "retrieved_docs": [],
+        }
+        
+        try:
+            # Search for first user message
+            result = await self.session_search(
+                query="*",
+                limit=1,
+                sort="oldest",
+                session_id=session_id,
+            )
+            
+            if result and result.get("messages"):
+                first_msg = result["messages"][0]
+                if first_msg.get("role") == "user":
+                    context["first_user_message"] = first_msg.get("content", "")[:500]
+                    
+        except Exception as e:
+            logger.debug("Session context extraction failed: %s", e)
+        
+        return context
+    
+    def _classify_task(self, message: str) -> str:
+        """Classify task type from user message."""
+        message_lower = message.lower()
+        
+        if any(word in message_lower for word in ["write", "create", "build", "develop"]):
+            return "creation"
+        elif any(word in message_lower for word in ["fix", "debug", "resolve", "error"]):
+            return "debugging"
+        elif any(word in message_lower for word in ["analyze", "review", "assess", "evaluate"]):
+            return "analysis"
+        elif any(word in message_lower for word in ["plan", "design", "architecture"]):
+            return "planning"
+        elif any(word in message_lower for word in ["search", "find", "look up"]):
+            return "research"
+        else:
+            return "general"
+    
+    def _extract_reasoning_patterns(self, tool_calls: List[str]) -> List[str]:
+        """Extract reasoning patterns from tool usage."""
+        patterns = []
+        
+        tool_to_pattern = {
+            "terminal": "execute",
+            "read_file": "retrieve",
+            "search_files": "search",
+            "delegate_task": "delegate",
+            "session_search": "recall",
+            "memory": "persist",
+            "browser": "explore",
+            "web_search": "research",
+            "skill_view": "learn",
+            "patch": "modify",
+        }
+        
+        for tool in tool_calls:
+            pattern = tool_to_pattern.get(tool, tool)
+            if pattern not in patterns:
+                patterns.append(pattern)
+                
+        return patterns
+    
+    def _evaluate_outcome(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Evaluate session outcome."""
+        # Simple heuristic: if session has many messages and tools, likely successful
+        message_count = context.get("message_count", 0)
+        tool_count = len(context.get("tool_calls", []))
+        
+        if message_count > 50 and tool_count > 20:
+            score = 0.9
+            outcome = "accepted"
+        elif message_count > 20 and tool_count > 5:
+            score = 0.7
+            outcome = "accepted"
+        elif message_count > 5:
+            score = 0.5
+            outcome = "partial"
+        else:
+            score = 0.3
+            outcome = "incomplete"
+            
+        return {"score": score, "outcome": outcome}
+    
+    async def _get_recent_sessions(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent sessions from Hermes."""
+        try:
+            result = await self.session_search(limit=limit)
+            return result.get("results", [])
+        except Exception as e:
+            logger.warning("Failed to fetch recent sessions: %s", e)
+            return []
+    
+    async def _store_recipe(self, recipe: Dict[str, Any]) -> None:
+        """Store recipe in the stack's recipe compiler."""
+        # TODO: Integrate with actual RecipeStorage from sovereign-intelligence-stack
+        # For now, save to JSON files
+        pass
