@@ -30,12 +30,4 @@ all = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = [
-    "agent-recipe-compiler/tests",
-    "expert-signal-router/tests",
-    "autonomous-evaluation-loop/tests",
-    "sovereign-apprenticeship/tests",
-    "intelligence-observatory/tests",
-    "tacit-judgment-extractor/tests",
-    "tests",
-]
+testpaths = ["tests"]

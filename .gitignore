@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage/
+coverage.xml
+*.cover
+*.py,cover
+.tox/
+
+# Logs
+*.log
+logs/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Config files with secrets
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Type checking
+.mypy_cache/
+.pyre/
+.pytype/
+
+# Documentation build
+docs/_build/
+
+# Monitoring / telemetry (wandb)
+wandb/
+.wandb/
+
+# Docker
+.docker/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Tarballs / archives
+*.tar.gz
+*.zip
+
+# IDE patches
+*.patch
+*.diff

@@ -1,7 +1,7 @@
 """Sovereign Apprenticeship Engine - Asynchronous Database Layer"""
 
 import os
-from typing import List, Dict, AsyncIterator, Optional
+from typing import List, Dict, AsyncIterator, Optional, Any
 from datetime import datetime
 
 from shared.async_db import AsyncDatabase

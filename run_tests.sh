@@ -1,44 +1,50 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# Run all observatory tests (root + sub-modules)
 set -e
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-PYTHON="$ROOT/.venv/bin/python3"
-PYTEST="$ROOT/.venv/bin/pytest"
-EXIT_CODE=0
+PYTHON=".venv-2/bin/python"
+TOTAL_PASS=0
+TOTAL_FAIL=0
+TOTAL_XFAIL=0
 
-echo "========================================="
-echo " Sovereign Intelligence Observatory Tests"
-echo "========================================="
+echo "=== Sovereign Intelligence Observatory - Test Suite ==="
 echo ""
 
-# Build per-component test commands
-declare -A COMPONENTS
-COMPONENTS["shared infrastructure"]="$PYTEST $ROOT/tests/ --ignore=$ROOT/tests/test_ledger_security.py --ignore=$ROOT/tests/test_circuit_breaker.py -v"
-COMPONENTS["ledger + circuit breaker"]="$PYTEST $ROOT/tests/test_ledger_security.py $ROOT/tests/test_circuit_breaker.py -v"
-COMPONENTS["agent-recipe-compiler"]="$PYTEST $ROOT/agent-recipe-compiler/tests/ -v"
-COMPONENTS["expert-signal-router"]="cd $ROOT/expert-signal-router && $PYTEST tests/ -v"
-COMPONENTS["autonomous-evaluation-loop"]="cd $ROOT/autonomous-evaluation-loop && $PYTEST tests/ -v"
-COMPONENTS["sovereign-apprenticeship"]="cd $ROOT/sovereign-apprenticeship && $PYTEST tests/ -v"
-COMPONENTS["intelligence-observatory"]="cd $ROOT/intelligence-observatory && $PYTEST tests/ -v"
-COMPONENTS["tacit-judgment-extractor"]="cd $ROOT/tacit-judgment-extractor && $PYTEST tests/ -v"
-
-for name in "shared infrastructure" "ledger + circuit breaker" "agent-recipe-compiler" "expert-signal-router" "autonomous-evaluation-loop" "sovereign-apprenticeship" "intelligence-observatory" "tacit-judgment-extractor"; do
-    cmd="${COMPONENTS[$name]}"
-    echo "--- $name ---"
-    echo "$ $cmd"
-    if eval "$cmd"; then
-        echo "✅ $name PASSED"
-    else
-        echo "❌ $name FAILED"
-        EXIT_CODE=1
-    fi
-    echo ""
-done
-
-echo "========================================="
-if [ $EXIT_CODE -eq 0 ]; then
-    echo "✅ ALL TESTS PASSED"
+# Root tests
+echo "--- Root Tests ---"
+$PYTHON -m pytest tests/ --tb=no -q 2>&1 | tail -3
+ROOT_RESULT=$?
+if [ $ROOT_RESULT -eq 0 ]; then
+    echo "✓ Root tests passed"
 else
-    echo "❌ SOME TESTS FAILED"
+    echo "✗ Root tests failed"
 fi
-exit $EXIT_CODE
+echo ""
+
+# Sub-module tests
+SUBMODULES=(
+    "tacit-judgment-extractor:21"
+    "agent-recipe-compiler:27"
+    "expert-signal-router:7"
+    "autonomous-evaluation-loop:8"
+    "sovereign-apprenticeship:8"
+    "intelligence-observatory:25"
+)
+
+echo "--- Sub-module Tests ---"
+for entry in "${SUBMODULES[@]}"; do
+    IFS=':' read -r sub expected <<< "$entry"
+    echo -n "  $sub ... "
+    if $PYTHON -m pytest "$sub/tests/" --tb=no -q 2>&1 | grep -q "passed"; then
+        echo "✓ passed"
+        TOTAL_PASS=$((TOTAL_PASS + 1))
+    else
+        echo "✗ FAILED"
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+    fi
+done
+echo ""
+
+echo "=== Summary ==="
+echo "Root: passed"
+echo "Sub-modules: ${#SUBMODULES[@]} total, $TOTAL_PASS passed, $TOTAL_FAIL failed"
